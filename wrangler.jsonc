@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "class-ai-assistant",
+  "main": "server/index.ts",
+  "compatibility_date": "2026-09-01",
+  "assets": { "directory": "./dist", "binding": "ASSETS", "not_found_handling": "single-page-application", "run_worker_first": ["/api/*"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "class-ai", "database_id": "3643488a-b4d1-435a-a769-f8f279c054b4", "migrations_dir": "migrations" }],
+  "vars": { "API_BASE": "https://api.deepseek.com", "MODEL": "deepseek-chat" }
+}

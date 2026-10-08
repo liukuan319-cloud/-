@@ -1,0 +1,4 @@
+# Server-only local secrets. Never commit .dev.vars.
+API_BASE=https://api.deepseek.com
+MODEL=deepseek-chat
+API_KEY=

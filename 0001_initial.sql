@@ -1,0 +1,18 @@
+PRAGMA foreign_keys=ON;
+CREATE TABLE classes (id TEXT PRIMARY KEY, name TEXT NOT NULL, invite_code TEXT NOT NULL UNIQUE, is_demo INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE TABLE members (id TEXT PRIMARY KEY, class_id TEXT NOT NULL REFERENCES classes(id), nickname TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','student')), recovery_hash TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL, UNIQUE(class_id,nickname));
+CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, member_id TEXT NOT NULL REFERENCES members(id), expires_at TEXT NOT NULL);
+CREATE TABLE notices (id TEXT PRIMARY KEY, class_id TEXT NOT NULL REFERENCES classes(id), author_id TEXT NOT NULL REFERENCES members(id), title TEXT NOT NULL, content TEXT NOT NULL, source_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'published', version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE notice_versions (notice_id TEXT NOT NULL REFERENCES notices(id), version INTEGER NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(notice_id,version));
+CREATE TABLE tasks (id TEXT PRIMARY KEY, notice_id TEXT NOT NULL REFERENCES notices(id), class_id TEXT NOT NULL REFERENCES classes(id), title TEXT NOT NULL, description TEXT NOT NULL, due_at TEXT, audience TEXT NOT NULL CHECK(audience IN ('all','selected')), version INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE task_recipients (task_id TEXT NOT NULL REFERENCES tasks(id), member_id TEXT NOT NULL REFERENCES members(id), PRIMARY KEY(task_id,member_id));
+CREATE TABLE task_status (task_id TEXT NOT NULL REFERENCES tasks(id), member_id TEXT NOT NULL REFERENCES members(id), status TEXT NOT NULL CHECK(status IN ('pending','completed')), version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY(task_id,member_id));
+CREATE TABLE actions (id TEXT PRIMARY KEY, class_id TEXT NOT NULL REFERENCES classes(id), member_id TEXT NOT NULL REFERENCES members(id), type TEXT NOT NULL, payload TEXT NOT NULL, expires_at TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', result TEXT, execution_token TEXT);
+CREATE TABLE messages (id TEXT PRIMARY KEY, member_id TEXT NOT NULL REFERENCES members(id), role TEXT NOT NULL, content TEXT NOT NULL, cards TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL);
+CREATE TABLE audit_log (id TEXT PRIMARY KEY, class_id TEXT NOT NULL, member_id TEXT NOT NULL, action TEXT NOT NULL, target_id TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+CREATE INDEX idx_members_class ON members(class_id);
+CREATE INDEX idx_notices_class ON notices(class_id,created_at);
+CREATE INDEX idx_tasks_class ON tasks(class_id);
+CREATE INDEX idx_messages_member ON messages(member_id,created_at);
+CREATE INDEX idx_actions_member ON actions(member_id);
