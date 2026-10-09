@@ -20,14 +20,14 @@ pnpm start
 
 ## 模型配置
 
-班枢智能体逻辑已经移入本项目后端，网页通过同域 `/api/chat` 调用，不再请求 Vercel 云函数。接口契约、四个工具及验证边界见 [本地智能体接入](docs/banshu-native.md)。
+班枢智能体逻辑已经移入本项目后端，网页通过同域 `/api/chat` 调用，不再请求 Vercel 云函数。接口契约与验证边界见 [本地智能体接入](docs/banshu-native.md)；正式版还提供班级信息、成员、任务等只读工具。
 
 ```powershell
 Copy-Item .dev.vars.example .dev.vars
 # 编辑 .dev.vars，填写 API_KEY，然后重启 pnpm start
 ```
 
-`API_BASE`、`MODEL` 和 `API_KEY` 只在服务端环境配置；仍兼容此前的 `AI_BASE_URL`、`AI_MODEL` 和 `AI_API_KEY`。不要提交 `.dev.vars`、API Key 或真实班级数据。没有 Key 时，示例班级标明有限规则体验；真实班级的常规通知与待办仍能使用，真实 AI 会显示未配置。
+`API_BASE`、`MODEL` 和 `API_KEY` 只在服务端环境配置；仍兼容此前的 `AI_BASE_URL`、`AI_MODEL` 和 `AI_API_KEY`。不要提交 `.dev.vars`、API Key 或真实班级数据。没有 Key 时，真实班级的常规通知与待办仍能使用，AI 会明确显示待配置。
 
 ## Cloudflare 本地运行和部署
 
@@ -38,21 +38,20 @@ pnpm db:migrate
 pnpm worker:dev
 ```
 
-部署前创建 D1 数据库，把返回的真实 database_id 写入 `wrangler.jsonc`，运行远程迁移并配置 Worker Secret：
+首次部署时创建 D1 数据库，把返回的真实 database_id 写入 `wrangler.jsonc`，运行远程迁移并配置 Worker Secret。当前仓库已填写正式数据库 ID，无须重复创建：
 
 ```powershell
-pnpm exec wrangler d1 create class-ai
 pnpm exec wrangler d1 migrations apply class-ai --remote
 pnpm exec wrangler secret put API_KEY
 pnpm build
 pnpm exec wrangler deploy
 ```
 
-不要用仓库内占位 database_id 部署，不自动升级付费套餐。上线后必须测试校园网和手机网络能否打开。
+不自动升级付费套餐。上线后仍须测试校园网和手机网络能否打开。
 
 ## 从 GitHub 自动部署到 Cloudflare
 
-这个仓库已经配置了 Cloudflare Worker、静态资源和 D1。推荐把 GitHub 仓库连接到**当前已经创建的 `class-ai-assistant` Worker**，让 Cloudflare 从仓库构建并发布：
+这个仓库已经配置了 Cloudflare Worker、静态资源和 D1。2026-10-09 已通过 Wrangler 部署到 `https://class-ai-assistant.liukuan319.workers.dev`，但 GitHub 推送没有触发新构建记录。若需要今后自动部署，需把 GitHub 仓库连接到**当前已创建的 `class-ai-assistant` Worker**：
 
 1. 将本项目源码推送到自己的 GitHub 仓库。不要上传 `.dev.vars`、`.env`、`.local`、`.wrangler`、`node_modules` 或 `dist`；`.gitignore` 已排除这些本机文件。
 2. 在 Cloudflare Dashboard 打开 Workers & Pages，选择现有 `class-ai-assistant` Worker 的设置，连接 GitHub 仓库。选择要发布的分支。

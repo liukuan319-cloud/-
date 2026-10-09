@@ -10,11 +10,11 @@
 
 - 前端：React + TypeScript + Vite + lucide-react，`src/App.tsx` 为页面和交互编排，`src/api.ts` 为同源 `/api` 客户端，`src/styles.css` 为响应式薄荷绿色视觉系统。
 - 服务端：Hono Worker（`server/index.ts`），所有身份、权限、确认和数据写入在后端执行。
-- 数据库：Cloudflare D1 SQLite。迁移文件位于 `migrations/0001_initial.sql`。
-- AI：`server/ai.ts` 提供示例规则模式和 OpenAI 兼容工具调用适配层。API 密钥仅放在 Worker 的服务端环境变量中。
+- 数据库：Cloudflare D1 SQLite。迁移文件位于 `migrations/`，当前应用至 `0005_timetable_duty.sql`。
+- AI：`server/ai.ts` 提供 OpenAI 兼容工具调用适配层。API 密钥仅放在 Worker 的服务端环境变量中。
 - 部署：Wrangler 静态资源 + Worker，同源请求避免前端暴露模型凭据。
 
-数据流为：网页发送问题 → 服务端验证会话和班级 → AI 选择受限工具或读取示例规则 → 服务端执行班级范围内的查询 → 返回回答、来源卡或待确认操作。发布通知和修改完成状态都必须经确认接口，模型不能直接写库。
+数据流为：网页发送问题 → 服务端验证会话和班级 → AI 选择受限工具 → 服务端执行班级范围内的查询 → 返回回答和通知来源卡。发布通知和修改完成状态通过网页确认接口执行，模型不能直接写库。
 
 ## 3. 本地运行
 
@@ -35,12 +35,13 @@ pnpm db:migrate
 pnpm worker:dev
 ```
 
-复制 `.dev.vars.example` 为 `.dev.vars`，填写 `AI_API_KEY` 才会启用真实模型。没有 API Key 时，示例班级可使用有限规则演示；这不等于真实模型验收，也不会伪装成真实 AI。
+复制 `.dev.vars.example` 为 `.dev.vars`，填写 `API_KEY` 才会启用真实模型。没有 API Key 时，AI 会提示待配置，通知和待办仍可使用。
 
 ## 4. 接口与权限摘要
 
 - `POST /api/classes` 创建班级和管理员身份。
-- `POST /api/join` 使用邀请码加入；`POST /api/session/recover` 使用一次展示的恢复码找回身份。
+- `POST /api/join` 使用姓名或学号与邀请码匹配在册成员；名单外默认拒绝。
+- `POST /api/class/members/import`、`PATCH /api/class/members/:id` 管理名单和角色；`PUT /api/class/schedule`、`POST /api/class/schedule/import` 管理课表和值日，仅班干部可写。
 - `GET /api/tasks` 只返回当前成员可见任务；`GET /api/admin/tasks`、`GET /api/tasks/:id/progress` 仅管理员可用。
 - `POST /api/drafts`、`POST /api/actions/:id/confirm` 负责通知预览和确认发布。
 - `POST /api/actions` 产生任务状态确认卡；确认只影响当前成员。
@@ -49,11 +50,11 @@ pnpm worker:dev
 
 ## 5. 安全和数据约束
 
-会话为 HttpOnly、SameSite Strict Cookie；恢复码只保存 SHA-256 摘要。写请求检查同源和请求大小，身份创建、加入、恢复及聊天等入口另外实施限流。通知原文只是资料，不能覆盖系统权限。确认卡有版本号和有效期，重复请求具有幂等结果，冲突时要求重新生成。演示班级和真实班级使用独立记录。
+会话为 HttpOnly、SameSite Strict Cookie。写请求检查同源和请求大小，身份创建、加入及聊天入口实施限流。通知原文只是资料，不能覆盖系统权限。确认卡有版本号和有效期，重复请求具有幂等结果，冲突时要求重新生成。移出成员会失效登录，历史记录保留。
 
 ## 6. 已验证与待验证
 
-自动验证当前包含：SQLite 迁移、44 个自动测试（25 项后端、19 项 AI 模拟服务测试）、TypeScript 检查、Vite 生产构建。真实模型需要配置可用凭据后再验证工具调用和回答内容。移动网络访问、手机日历客户端差异、课堂成员试用和线上部署尚未在本说明中虚构为已完成。
+自动验证包含 SQLite 迁移、62 个自动测试、TypeScript 检查和 Vite 生产构建。2026-10-09 本机临时班级实测了创建、成员导入、名单登录和真实 AI 空待办回答；线上 Worker 首页及 `/api/health` 已可访问。校园网、真实手机日历和课堂成员试用仍需实测。
 
 ## 7. 实地试用记录（待填写）
 
