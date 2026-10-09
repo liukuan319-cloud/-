@@ -1,14 +1,18 @@
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { admin,uuid,now } from './auth';
-import { draftSchema,type Draft } from './validation';
+import { draftSchema,noticeCategorySchema,noticePrioritySchema } from './validation';
 import type { Env,Identity,Task,Notice,Action } from './types';
 const fail=(message:string)=>new HTTPException(409,{message});
 export async function tasks(env:Env,id:Identity):Promise<Task[]>{
  const r=await env.DB.prepare(`SELECT t.id,t.notice_id AS noticeId,t.title,t.description,t.due_at AS dueAt,t.audience,COALESCE(s.status,'pending') AS status,COALESCE(s.version,0) AS version,n.title AS noticeTitle FROM tasks t JOIN notices n ON n.id=t.notice_id LEFT JOIN task_status s ON s.task_id=t.id AND s.member_id=? WHERE t.class_id=? AND n.status='published' AND (t.audience='all' OR EXISTS(SELECT 1 FROM task_recipients r WHERE r.task_id=t.id AND r.member_id=?)) ORDER BY t.due_at IS NULL,t.due_at,t.id`).bind(id.user.id,id.user.classId,id.user.id).all<Task>();return r.results;
 }
-export async function notices(env:Env,id:Identity):Promise<Notice[]>{
- return (await env.DB.prepare(`SELECT n.id,n.title,n.content,n.source_date AS sourceDate,n.created_at AS createdAt,n.updated_at AS updatedAt,n.version,n.status,m.nickname AS authorName FROM notices n JOIN members m ON m.id=n.author_id WHERE n.class_id=? AND (n.status='published' OR ?='admin') ORDER BY n.created_at DESC,n.id`).bind(id.user.classId,id.user.role).all<Notice>()).results;
+export async function noticeCategories(env:Env){return (await env.DB.prepare('SELECT id,name,color FROM notice_categories ORDER BY sort_order').all<{id:string;name:string;color:string}>()).results;}
+export async function notices(env:Env,id:Identity,filters:{q?:string;category?:string}={}):Promise<Notice[]>{
+ const category=filters.category?noticeCategorySchema.parse(filters.category):null;
+ const query=filters.q?.trim().slice(0,120).toLowerCase()||null;
+ const rows=(await env.DB.prepare(`SELECT n.id,n.title,n.content,n.source_date AS sourceDate,n.source_time AS sourceTime,n.category_id AS categoryId,c.name AS categoryName,c.color AS categoryColor,n.priority,n.is_pinned AS pinned,n.created_at AS createdAt,n.updated_at AS updatedAt,n.version,n.status,m.nickname AS authorName FROM notices n JOIN members m ON m.id=n.author_id JOIN notice_categories c ON c.id=n.category_id WHERE n.class_id=? AND (n.status='published' OR ?='admin') AND (? IS NULL OR n.category_id=?) AND (? IS NULL OR LOWER(n.title) LIKE '%'||?||'%' OR LOWER(n.content) LIKE '%'||?||'%') ORDER BY n.is_pinned DESC,n.created_at DESC,n.id`).bind(id.user.classId,id.user.role,category,category,query,query,query).all<Notice>()).results;
+ return rows.map(n=>({...n,pinned:Boolean(n.pinned)}));
 }
 export async function notice(env:Env,id:Identity,noticeId:string){const n=(await notices(env,id)).find(n=>n.id===noticeId);if(!n)throw new HTTPException(404,{message:'通知不存在或不可访问。'});return n;}
 export async function members(env:Env,id:Identity){admin(id);return (await env.DB.prepare('SELECT id,nickname,role,student_no AS studentNo,note FROM members WHERE deleted_at IS NULL AND class_id=? ORDER BY created_at,id').bind(id.user.classId).all<{id:string;nickname:string;role:string}>()).results;}
@@ -32,7 +36,7 @@ export async function confirmAction(env:Env,id:Identity,actionId:string,edited?:
  if(a.type==='publish_notice'){
   const d=await validateDraft(env,id,edited??JSON.parse(a.payload));const noticeId=uuid(),time=now();result={noticeId,message:'通知已发布，相关同学现在可以看到待办。'};
   sql.push(env.DB.prepare(`UPDATE actions SET state='done',result=?,execution_token=? WHERE id=? AND state='pending' AND expires_at>?`).bind(JSON.stringify(result),token,a.id,time));
-  sql.push(env.DB.prepare(`INSERT INTO notices(id,class_id,author_id,title,content,source_date,created_at,updated_at) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM actions WHERE id=? AND execution_token=?)`).bind(noticeId,id.user.classId,id.user.id,d.title,d.content,d.sourceDate,time,time,a.id,token));
+  sql.push(env.DB.prepare(`INSERT INTO notices(id,class_id,author_id,title,content,source_date,source_time,category_id,priority,is_pinned,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM actions WHERE id=? AND execution_token=?)`).bind(noticeId,id.user.classId,id.user.id,d.title,d.content,d.sourceDate,d.sourceTime,d.categoryId,d.priority,d.pinned?1:0,time,time,a.id,token));
   sql.push(env.DB.prepare(`INSERT INTO notice_versions(notice_id,version,title,content,created_at) SELECT ?,1,?,?,? WHERE EXISTS(SELECT 1 FROM actions WHERE id=? AND execution_token=?)`).bind(noticeId,d.title,d.content,time,a.id,token));
   for(const t of d.tasks){const taskId=uuid();sql.push(env.DB.prepare(`INSERT INTO tasks(id,notice_id,class_id,title,description,due_at,audience) SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM actions WHERE id=? AND execution_token=?)`).bind(taskId,noticeId,id.user.classId,t.title,t.description,t.dueAt,t.audience,a.id,token));if(t.memberIds.length)sql.push(env.DB.prepare(`INSERT INTO task_recipients(task_id,member_id) SELECT ?,value FROM json_each(?) WHERE EXISTS(SELECT 1 FROM actions WHERE id=? AND execution_token=?)`).bind(taskId,JSON.stringify(t.memberIds),a.id,token));}
  }else if(a.type==='task_status'){
@@ -44,10 +48,11 @@ export async function confirmAction(env:Env,id:Identity,actionId:string,edited?:
  await env.DB.batch(sql);const finished=await env.DB.prepare('SELECT state,result FROM actions WHERE id=?').bind(a.id).first<any>();if(finished?.state!=='done')throw fail('数据已变化，请重新生成确认卡。');return JSON.parse(finished.result);
 }
 export async function editNotice(env:Env,id:Identity,noticeId:string,input:unknown,withdraw=false){
- admin(id);const current=await notice(env,id,noticeId);const v=z.object({version:z.number().int(),title:z.string().trim().min(1).max(120).optional(),content:z.string().trim().min(1).max(12000).optional()}).parse(input);if(current.version!==v.version)throw fail('通知已被修改，请刷新。');if(current.status!=='published')throw fail('通知已撤回，不能再修改。');
- const time=now(),title=v.title??current.title,content=v.content??current.content;
+ admin(id);const current=await notice(env,id,noticeId);const v=z.object({version:z.number().int(),title:z.string().trim().min(1).max(120).optional(),content:z.string().trim().min(1).max(12000).optional(),sourceDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),sourceTime:z.string().datetime({offset:true}).nullable().optional(),categoryId:noticeCategorySchema.optional(),priority:noticePrioritySchema.optional(),pinned:z.boolean().optional()}).parse(input);if(current.version!==v.version)throw fail('通知已被修改，请刷新。');if(current.status!=='published')throw fail('通知已撤回，不能再修改。');
+ const time=now(),title=v.title??current.title,content=v.content??current.content,categoryId=v.categoryId??current.categoryId,pinned=v.pinned??current.pinned;
+ if(pinned&&categoryId!=='important')throw new HTTPException(400,{message:'只有重要公告可以置顶。'});
  const rs=await env.DB.batch([
- env.DB.prepare(`UPDATE notices SET title=?,content=?,status=?,version=version+1,updated_at=? WHERE id=? AND class_id=? AND version=? AND status='published'`).bind(title,content,withdraw?'withdrawn':'published',time,noticeId,id.user.classId,v.version),
+ env.DB.prepare(`UPDATE notices SET title=?,content=?,source_date=?,source_time=?,category_id=?,priority=?,is_pinned=?,status=?,version=version+1,updated_at=? WHERE id=? AND class_id=? AND version=? AND status='published'`).bind(title,content,v.sourceDate??current.sourceDate,v.sourceTime===undefined?current.sourceTime:v.sourceTime,categoryId,v.priority??current.priority,pinned?1:0,withdraw?'withdrawn':'published',time,noticeId,id.user.classId,v.version),
  env.DB.prepare(`INSERT OR IGNORE INTO notice_versions(notice_id,version,title,content,created_at) SELECT id,version,title,content,updated_at FROM notices WHERE id=? AND updated_at=?`).bind(noticeId,time),
  env.DB.prepare(`INSERT INTO audit_log(id,class_id,member_id,action,target_id,created_at) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM notices WHERE id=? AND updated_at=?)`).bind(uuid(),id.user.classId,id.user.id,withdraw?'withdraw_notice':'edit_notice',noticeId,time,noticeId,time)
  ]);if(!rs[0].meta.changes)throw fail('通知已变化，请刷新。');return notice(env,id,noticeId);

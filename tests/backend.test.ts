@@ -19,7 +19,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const results = statements.map(s => s.execute()); this.db.exec('COMMIT'); return results } catch (e) { this.db.exec('ROLLBACK'); throw e } }
 }
@@ -129,6 +129,34 @@ describe('identity and authentication', () => {
 })
 
 describe('business permissions and confirmations', () => {
+  it('filters class notices by category and search, with important pinned notices first', async () => {
+    const owner = await signup(), student = await join(owner), other = await signup('其他班')
+    const categories = await (await request('/notice-categories', 'GET', undefined, student.cookie)).json() as any
+    expect(categories.categories.map((c:any) => c.name)).toEqual(['重要公告','组队通知','考证考试','活动报名','日常事务'])
+    const ordinary = await publish(owner, draft({ title: '普通运动会', categoryId: 'activity' }))
+    const important = await publish(owner, draft({ title: '重要考试', categoryId: 'important', pinned: true, priority: 'high', sourceTime: '2026-10-08T09:00:00+08:00' }))
+    const all = (await (await request('/notices', 'GET', undefined, student.cookie)).json() as any).notices
+    expect(all.map((n:any) => n.id)).toEqual([important.noticeId, ordinary.noticeId])
+    expect(all[0]).toMatchObject({ categoryId: 'important', categoryName: '重要公告', priority: 'high', pinned: true, sourceTime: '2026-10-08T09:00:00+08:00' })
+    expect((await (await request('/notices?category=activity&q=%E8%BF%90%E5%8A%A8', 'GET', undefined, student.cookie)).json() as any).notices).toHaveLength(1)
+    expect((await (await request('/notices?q=%E8%80%83%E8%AF%95', 'GET', undefined, other.cookie)).json() as any).notices).toHaveLength(0)
+    expect((await request('/notices?category=unknown', 'GET', undefined, owner.cookie)).status).toBe(400)
+  })
+  it('validates category and pinning through draft confirmation and versioned edits', async () => {
+    const owner = await signup(), student = await join(owner)
+    expect((await request('/drafts', 'POST', draft({ categoryId: 'invalid' }), owner.cookie)).status).toBe(400)
+    expect((await request('/drafts', 'POST', draft({ categoryId: 'team', pinned: true }), owner.cookie)).status).toBe(400)
+    const action = await prepare(owner, draft({ categoryId: 'important', pinned: true }))
+    expect((await request(`/actions/${action.id}/confirm`, 'POST', { draft: draft({ categoryId: 'team', pinned: true }) }, owner.cookie)).status).toBe(400)
+    const result = await request(`/actions/${action.id}/confirm`, 'POST', {}, owner.cookie)
+    expect(result.status).toBe(200)
+    const noticeId = (await result.json() as any).result.noticeId
+    expect((await request(`/notices/${noticeId}`, 'PATCH', { version: 1, pinned: false }, student.cookie)).status).toBe(403)
+    expect((await request(`/notices/${noticeId}`, 'PATCH', { version: 1, categoryId: 'team' }, owner.cookie)).status).toBe(400)
+    const edited = await request(`/notices/${noticeId}`, 'PATCH', { version: 1, categoryId: 'team', pinned: false }, owner.cookie)
+    expect(edited.status).toBe(200)
+    expect((await edited.json() as any).notice).toMatchObject({ categoryId: 'team', pinned: false, version: 2 })
+  })
   it('preparing a draft never publishes; concurrent confirmation publishes exactly once', async () => {
     const owner = await signup(); const action = await prepare(owner)
     expect(db.db.prepare('SELECT count(*) AS count FROM notices').get()!.count).toBe(0)
