@@ -5,11 +5,15 @@ import { z } from 'zod';
 import type { AppBindings } from './types';
 import { uuid,now,hash,secret,session,logout,identity,limit,mode,admin } from './auth';
 import { nicknameSchema,dateSchema,calendar,beijingDate } from './validation';
-import { tasks,notices,notice,members,validateDraft,makeAction,prepareStatus,progress,confirmAction,editNotice,adminTasks } from './business';
+import { tasks,notices,notice,noticeCategories,members,validateDraft,makeAction,prepareStatus,progress,confirmAction,editNotice,adminTasks } from './business';
 import { demoChat,banshuChat } from './ai';
 import { changeMember } from './member-admin';
 import { importMembers } from './member-import';
 import { getSchedule, importSchedule, replaceSchedule, loadBanshuContext } from './schedule';
+import { getAcademics,setAcademicTargets,createAcademicCourse,updateAcademicCourse,deleteAcademicCourse,setAcademicGrade,setAcademicComprehensive,importAcademicGrades } from './academics';
+import { calendarData,addExam,addCalendarEvent,setSemesterStart,importCalendar } from './calendar';
+import { createVote,listVotes,castVote,endVote } from './votes';
+import { memberReminders,reminderRules,saveReminderRules } from './reminders';
 const app=new Hono<AppBindings>();
 app.use('/api/*',async(c,next)=>{
  c.header('Cache-Control','no-store');c.header('X-Content-Type-Options','nosniff');
@@ -41,7 +45,8 @@ app.post('/api/join',async c=>{await limit(c.env,'join:'+(c.req.header('CF-Conne
 app.delete('/api/session',async c=>{await logout(c);return c.json({ok:true});});
 app.post('/api/invite/rotate',async c=>{const id=await identity(c);admin(id);const code=secret().slice(0,10).toUpperCase();await c.env.DB.prepare('UPDATE classes SET invite_code=? WHERE id=?').bind(code,id.user.classId).run();return c.json({inviteCode:code});});
 app.get('/api/tasks',async c=>{const id=await identity(c);return c.json({tasks:await tasks(c.env,id)});});app.get('/api/admin/tasks',async c=>{const id=await identity(c);return c.json({tasks:await adminTasks(c.env,id)});});
-app.get('/api/notices',async c=>{const id=await identity(c);return c.json({notices:await notices(c.env,id)});});app.get('/api/notices/:id',async c=>{const id=await identity(c),n=await notice(c.env,id,c.req.param('id'));const ts=(await tasks(c.env,id)).filter(t=>t.noticeId===n.id);return c.json({notice:n,tasks:ts});});
+app.get('/api/notice-categories',async c=>{await identity(c);return c.json({categories:await noticeCategories(c.env)});});
+app.get('/api/notices',async c=>{const id=await identity(c);return c.json({notices:await notices(c.env,id,{q:c.req.query('q'),category:c.req.query('category')})});});app.get('/api/notices/:id',async c=>{const id=await identity(c),n=await notice(c.env,id,c.req.param('id'));const ts=(await tasks(c.env,id)).filter(t=>t.noticeId===n.id);return c.json({notice:n,tasks:ts});});
 app.post('/api/class/members/import',async c=>c.json(await importMembers(c.env,await identity(c),await json(c))));
 app.patch('/api/class/settings',async c=>{const id=await identity(c);admin(id);const b=z.object({allowSelfJoin:z.boolean()}).parse(await json(c));await c.env.DB.prepare('UPDATE classes SET allow_self_join=? WHERE id=?').bind(b.allowSelfJoin?1:0,id.user.classId).run();return c.json({allowSelfJoin:b.allowSelfJoin});});
 app.patch('/api/class/members/:id',async c=>{const id=await identity(c);admin(id);const b=z.object({role:z.enum(['admin','student'])}).parse(await json(c));return c.json(await changeMember(c.env,id,c.req.param('id'),b.role));});
@@ -50,6 +55,26 @@ app.get('/api/members',async c=>{const id=await identity(c);return c.json({membe
 app.get('/api/class/schedule',async c=>{const id=await identity(c);return c.json(await getSchedule(c.env,id));});
 app.put('/api/class/schedule',async c=>{const id=await identity(c);return c.json(await replaceSchedule(c.env,id,await json(c)));});
 app.post('/api/class/schedule/import',async c=>{const id=await identity(c);return c.json(await importSchedule(c.env,id,await json(c)));});
+app.get('/api/academics',async c=>c.json(await getAcademics(c.env,await identity(c),c.req.query('memberId'))));
+app.put('/api/academics/targets',async c=>c.json(await setAcademicTargets(c.env,await identity(c),await json(c))));
+app.post('/api/academics/courses',async c=>c.json(await createAcademicCourse(c.env,await identity(c),await json(c))));
+app.put('/api/academics/courses/:id',async c=>c.json(await updateAcademicCourse(c.env,await identity(c),c.req.param('id'),await json(c))));
+app.delete('/api/academics/courses/:id',async c=>c.json(await deleteAcademicCourse(c.env,await identity(c),c.req.param('id'))));
+app.put('/api/academics/grades',async c=>c.json(await setAcademicGrade(c.env,await identity(c),await json(c))));
+app.put('/api/academics/comprehensive',async c=>c.json(await setAcademicComprehensive(c.env,await identity(c),await json(c))));
+app.post('/api/academics/grades/import',async c=>c.json(await importAcademicGrades(c.env,await identity(c),await json(c))));
+app.get('/api/calendar',async c=>c.json(await calendarData(c.env,await identity(c))));
+app.put('/api/calendar/semester',async c=>c.json(await setSemesterStart(c.env,await identity(c),await json(c))));
+app.post('/api/calendar/exams',async c=>c.json(await addExam(c.env,await identity(c),await json(c))));
+app.post('/api/calendar/events',async c=>c.json(await addCalendarEvent(c.env,await identity(c),await json(c))));
+app.post('/api/calendar/import',async c=>c.json(await importCalendar(c.env,await identity(c),await json(c))));
+app.get('/api/votes',async c=>c.json({votes:await listVotes(c.env,await identity(c))}));
+app.post('/api/votes',async c=>c.json(await createVote(c.env,await identity(c),await json(c))));
+app.post('/api/votes/:id/cast',async c=>c.json(await castVote(c.env,await identity(c),c.req.param('id'),await json(c))));
+app.post('/api/votes/:id/end',async c=>c.json(await endVote(c.env,await identity(c),c.req.param('id'))));
+app.get('/api/reminders',async c=>c.json({reminders:await memberReminders(c.env,await identity(c))}));
+app.get('/api/reminders/rules',async c=>c.json({rules:await reminderRules(c.env,await identity(c))}));
+app.put('/api/reminders/rules',async c=>c.json({rules:await saveReminderRules(c.env,await identity(c),await json(c))}));
 app.get('/api/tasks/:id/progress',async c=>{const id=await identity(c);return c.json(await progress(c.env,id,c.req.param('id')));});
 app.get('/api/tasks/:id/calendar.ics',async c=>{const id=await identity(c),ts=await tasks(c.env,id),t=ts.find(t=>t.id===c.req.param('id'));if(!t||!t.dueAt)throw new HTTPException(404,{message:'任务没有可导出的截止时间。'});return c.body(calendar({id:t.id,title:t.title,description:t.description,dueAt:t.dueAt}),200,{'Content-Type':'text/calendar; charset=utf-8','Content-Disposition':`attachment; filename="task-${t.id}.ics"`});});
 app.post('/api/actions',async c=>{const id=await identity(c),b=await json(c);return c.json({action:await prepareStatus(c.env,id,b)});});
@@ -82,10 +107,12 @@ app.post('/api/chat',async c=>{
    if(currentMode==='demo')result=await demoChat(c.env,id,b.message,b.sourceDate);
    else{
     const context=await loadBanshuContext(c.env,id);
+    const [academic,dates,alerts]=await Promise.all([getAcademics(c.env,id),calendarData(c.env,id),memberReminders(c.env,id)]);
+    const agentData={...context.data,academics:academic,exams:dates.exams,calendarEvents:dates.events,reminders:alerts};
     const previous=await c.env.DB.prepare("SELECT role,content FROM messages WHERE member_id=? AND role IN ('user','assistant') ORDER BY created_at DESC,id DESC LIMIT 12").bind(id.user.id).all<{role:'user'|'assistant';content:string}>();
-    const contextPrompt=`当前北京时间 ${beijingDate()}。本接口仅文字问答，本次模型工具均为只读，不会执行网页操作。发布通知或完成反馈请使用网页按钮。你可以调用工具查询当前班级名称、班干部和成员姓名、课程表、值日、最近七天通知、本人任务和班干部任务进度。只根据工具结果回答，不编造；成员信息不含学号。`;
+    const contextPrompt=`当前北京时间 ${beijingDate()}。本接口仅文字问答，本次模型工具均为只读，不会执行网页操作。发布通知或完成反馈请使用网页按钮。你可以调用工具查询班级、课表、值日、通知、本人任务、本人学业、考试校历、本人提醒和班干部任务进度。只根据工具结果回答，不编造；成员信息不含学号，学业仅为本人。`;
     await report('正在查询班级数据…');
-    const reply=await banshuChat(c.env,`${contextPrompt}\n用户问题：${b.message}`,previous.results.slice().reverse(),context.data,abort.signal);
+    const reply=await banshuChat(c.env,`${contextPrompt}\n用户问题：${b.message}`,previous.results.slice().reverse(),agentData,abort.signal);
     const visibleNotices=(await notices(c.env,id)).filter(n=>n.status==='published'&&reply.includes(n.title));
     result={content:reply,cards:visibleNotices.map(n=>({type:'notice' as const,notice:n}))};
    }

@@ -90,6 +90,9 @@ const banshuToolDefinitions = [
   tool('get_notices', '查询最近七天已发布通知，可按标题或原文关键词筛选。', { query: { type: 'string' } }),
   tool('get_my_tasks', '查询当前用户自己的任务、完成状态和截止时间，包含已逾期任务。', { query: { type: 'string' }, status: { type: 'string', enum: ['all', 'pending', 'completed'] } }),
   tool('get_task_progress', '仅班干部可查询本班任务完成统计。', { query: { type: 'string' } }),
+  tool('get_my_academics', '查询当前登录成员本人的绩点、学分和综测；绝不查询他人。', {}),
+  tool('get_calendar', '查询考试日期、报名截止和校历近期节点。', { query:{type:'string'} }),
+  tool('get_reminders', '查询当前成员本人的站内提醒。', {}),
 ];
 const banshuDataSchema = z.object({
   timetable: z.array(z.object({ day: z.string(), time: z.string(), course: z.string(), room: z.string() }).passthrough()).max(500).default([]),
@@ -99,7 +102,11 @@ const banshuDataSchema = z.object({
   className: z.string().default(''), role: z.enum(['admin','student']).default('student'),
   ownTasks: z.array(z.object({ title: z.string(), description: z.string().default(''), dueAt: z.string().nullable().optional(), status: z.string() }).passthrough()).max(500).default([]),
   adminProgress: z.array(z.object({ id: z.string().optional(), title: z.string(), total: z.number(), completed: z.number() }).passthrough()).max(500).default([]),
-}).default({ timetable: [], duty: [], members: [], notices: [], className: '', role: 'student', ownTasks: [], adminProgress: [] });
+  academics: z.unknown().optional(),
+  exams: z.array(z.object({name:z.string(),examAt:z.string(),registrationDeadline:z.string().nullable().optional()}).passthrough()).max(500).default([]),
+  calendarEvents: z.array(z.object({eventDate:z.string(),title:z.string()}).passthrough()).max(500).default([]),
+  reminders: z.array(z.object({message:z.string(),dueDate:z.string()}).passthrough()).max(500).default([]),
+}).default({ timetable: [], duty: [], members: [], notices: [], className: '', role: 'student', ownTasks: [], adminProgress: [], exams:[], calendarEvents:[], reminders:[] });
 const runBanshuTool = (name: string, rawArgs: unknown, data: z.infer<typeof banshuDataSchema>) => {
   const args = z.record(z.string(), z.unknown()).parse(rawArgs || {});
   if (name === 'get_timetable') {
@@ -152,6 +159,14 @@ const runBanshuTool = (name: string, rawArgs: unknown, data: z.infer<typeof bans
     const matches = data.adminProgress.filter(task => !query || task.title.toLowerCase().includes(query));
     return matches.length ? matches.map(task => `${task.title}：${task.completed}/${task.total} 人已自报完成`).join('\n') : '没有找到匹配的任务进度';
   }
+  if (name === 'get_my_academics') return data.academics ? JSON.stringify(data.academics) : '暂无本人的学业数据';
+  if (name === 'get_calendar') {
+    const query=typeof args.query==='string'?args.query.trim().toLowerCase():'';
+    const exams=data.exams.filter(item=>!query||item.name.toLowerCase().includes(query));
+    const events=data.calendarEvents.filter(item=>!query||item.title.toLowerCase().includes(query));
+    return exams.length||events.length?JSON.stringify({exams,events}):'暂无相关考试或校历数据';
+  }
+  if (name === 'get_reminders') return data.reminders.length?data.reminders.map(item=>`${item.dueDate} ${item.message}`).join('\n'):'暂无站内提醒';
   throw new Error('unsupported tool');
 };
 

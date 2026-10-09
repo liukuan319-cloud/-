@@ -19,7 +19,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const results = statements.map(s => s.execute()); this.db.exec('COMMIT'); return results } catch (e) { this.db.exec('ROLLBACK'); throw e } }
 }
@@ -81,6 +81,34 @@ describe('same-origin Banshu API contract', () => {
     expect(stream).toContain('周一有数据库课程')
     const providerBodies = provider.mock.calls.map(call => JSON.parse(String(call[1].body)))
     expect(JSON.stringify(providerBodies)).toContain('08:00-09:40 数据库课程（教3102）')
+  })
+})
+
+describe('second release class features', () => {
+  it('isolates academic data, calendar writes, and reminder settings by role', async () => {
+    const owner=await signup(), student=await join(owner), other=await signup('其他班级')
+    expect((await request('/academics','GET',undefined,student.cookie)).status).toBe(200)
+    expect((await request(`/academics?memberId=${owner.user.id}`,'GET',undefined,student.cookie)).status).toBe(403)
+    expect((await request('/calendar/exams','POST',{name:'英语四级',category:'考证',examAt:'2027-06-12T09:00:00+08:00'},student.cookie)).status).toBe(403)
+    expect((await request('/calendar/exams','POST',{name:'英语四级',category:'考证',examAt:'2027-06-12T09:00:00+08:00'},owner.cookie)).status).toBe(200)
+    const own=await (await request('/calendar','GET',undefined,student.cookie)).json() as any
+    const foreign=await (await request('/calendar','GET',undefined,other.cookie)).json() as any
+    expect(own.exams).toHaveLength(1);expect(foreign.exams).toHaveLength(0)
+    expect((await request('/reminders/rules','PUT',[{type:'exam',enabled:false,daysBefore:7}],student.cookie)).status).toBe(403)
+  })
+
+  it('allows one anonymous vote per member and never stores their member ID', async () => {
+    const owner=await signup(), student=await join(owner), other=await signup('其他班级')
+    const creation=await request('/votes','POST',{title:'活动时间',anonymous:true,closesAt:'2027-12-31T12:00:00+08:00',options:['周六','周日']},owner.cookie)
+    expect(creation.status).toBe(200)
+    const voteId=(await creation.json() as any).id
+    const option=(await (await request('/votes','GET',undefined,student.cookie)).json() as any).votes[0].options[0].id
+    expect((await request(`/votes/${voteId}/cast`,'POST',{optionId:option},student.cookie)).status).toBe(200)
+    expect((await request(`/votes/${voteId}/cast`,'POST',{optionId:option},student.cookie)).status).toBe(409)
+    expect(db.db.prepare('SELECT member_id FROM vote_records').get()!.member_id).toBeNull()
+    expect((await (await request('/votes','GET',undefined,other.cookie)).json() as any).votes).toHaveLength(0)
+    expect((await request(`/votes/${voteId}/end`,'POST',{},student.cookie)).status).toBe(403)
+    expect((await request(`/votes/${voteId}/end`,'POST',{},owner.cookie)).status).toBe(200)
   })
 })
 describe('class timetable and duty data',()=>{

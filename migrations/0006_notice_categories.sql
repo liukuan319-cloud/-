@@ -10,7 +10,7 @@ INSERT INTO notice_categories(id,name,color,sort_order) VALUES
  ('exam','考证考试','#6d7fb2',3),
  ('activity','活动报名','#c68a43',4),
  ('daily','日常事务','#8b9d8d',5);
-ALTER TABLE notices ADD COLUMN category_id TEXT NOT NULL DEFAULT 'daily' REFERENCES notice_categories(id);
+ALTER TABLE notices ADD COLUMN category_id TEXT NOT NULL DEFAULT 'daily';
 ALTER TABLE notices ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('normal','high'));
 ALTER TABLE notices ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1));
 ALTER TABLE notices ADD COLUMN source_time TEXT;

@@ -4,13 +4,14 @@ import { ArrowRight, ArrowUp, Bell, BookOpen, CalendarDays, Check, CheckCheck, C
 import { api, post, formatDate, overdue, beijingInput, beijingISOString } from './api'
 import type { Action, ChatCard, Draft, DraftTask, Member, Message, Notice, NoticeCategory, Session, Task } from './api'
 import { BRAND } from './config'
+import { AcademicsPage, CalendarPage, VotesPage, RemindersPage } from './ExpandedPages'
 
-type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'placeholder'
+type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'academics' | 'calendar' | 'votes' | 'reminders' | 'placeholder'
 const primaryNav = [
   { id: 'ai' as const, name: '首页' },
   { id: 'notices' as const, name: '通知', items: ['全部', '重要公告', '组队通知', '考证考试', '活动报名', '日常事务'] },
-  { id: 'tasks' as const, name: '学业', items: ['我的待办', '课程表', '考试安排'] },
-  { id: 'settings' as const, name: '班级', items: ['班级概览', '成员名单', '班级设置'] },
+  { id: 'academics' as const, name: '学业', items: ['学业概览', '课程表', '考试安排'] },
+  { id: 'settings' as const, name: '班级', items: ['班级概览', '日历', '投票', '提醒', '成员名单', '班级设置'] },
   { id: 'placeholder' as const, name: '更多', items: ['投票与接龙', '日程提醒', '资料库'] },
 ] as const
 const uid = () => crypto.randomUUID()
@@ -49,6 +50,7 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [section, setSection] = useState('首页')
   const [noticeCategory, setNoticeCategory] = useState<NoticeCategory | 'all'>('all')
+  const [reminderCount,setReminderCount]=useState(0)
   const [tasks, setTasks] = useState<Task[]>([])
   const [notices, setNotices] = useState<Notice[]>([])
   const [loading, setLoading] = useState(false)
@@ -86,10 +88,18 @@ export default function App() {
     finally { refreshRunning.current = false; if (showLoading) setLoading(false) }
   }
   function signedIn(value: Session) { setSession(value); setPage('ai'); setSection('首页') }
+  useEffect(()=>{if(!session)return;api<{reminders:unknown[]}>('/reminders').then(value=>setReminderCount(value.reminders.length)).catch(()=>setReminderCount(0))},[session?.user.id,page])
   function navigate(next: Page, label: string) { setPage(next); setSection(label); setDrawerOpen(false) }
   function navigateItem(parent: string, item: string) {
     if (parent === '通知') { const ids: Record<string, NoticeCategory | 'all'> = { '全部': 'all', '重要公告': 'important', '组队通知': 'team', '考证考试': 'exam', '活动报名': 'activity', '日常事务': 'daily' }; setNoticeCategory(ids[item] || 'all'); navigate('notices', item) }
     else if (item === '我的待办') navigate('tasks', item)
+    else if (item === '学业概览') navigate('academics', item)
+    else if (item === '课程表' || item === '考试安排') navigate('calendar', item)
+    else if (item === '日历') navigate('calendar', item)
+    else if (item === '投票') navigate('votes', item)
+    else if (item === '提醒') navigate('reminders', item)
+    else if (item === '投票与接龙') navigate('votes', item)
+    else if (item === '日程提醒') navigate('reminders', item)
     else if (item === '班级设置') navigate('settings', item)
     else navigate('placeholder', item)
   }
@@ -118,13 +128,17 @@ export default function App() {
   if (booting) return <div className="boot"><Brand /><LoaderCircle className="spin" /><span>正在准备你的班级空间…</span></div>
   if (!session) return <Welcome onSignIn={signedIn} />
   return <div className="app-shell">
-    <header className="site-header"><div className="topbar"><button className="brand-button" onClick={() => navigate('ai', '首页')} aria-label="返回首页"><Brand /></button><nav className="desktop-navigation" aria-label="主导航">{primaryNav.map(group => <div className={`nav-group ${page === group.id || (group.name === '更多' && page === 'admin') ? 'active' : ''}`} key={group.name}><button onClick={() => navigate(group.id, group.name)}>{group.name}{'items' in group && <ChevronDown size={14} />}</button>{'items' in group && <div className="nav-dropdown">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.role === 'admin' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav><div className="topbar-right"><span className="class-name">{session.classroom.name}</span><button className="header-alert icon-btn" aria-label="查看通知" onClick={() => navigate('notices', '全部')}><Bell size={19} /></button><button className="profile-trigger" onClick={() => navigate('settings', '班级设置')} aria-label="班级设置"><span className="avatar">{session.user.nickname.slice(-2)}</span><span>{session.user.nickname}</span></button><button className="menu-trigger icon-btn" aria-label={drawerOpen ? '关闭导航' : '打开导航'} aria-expanded={drawerOpen} onClick={() => setDrawerOpen(!drawerOpen)}>{drawerOpen ? <X size={23} /> : <Menu size={23} />}</button></div></div></header>
+    <header className="site-header"><div className="topbar"><button className="brand-button" onClick={() => navigate('ai', '首页')} aria-label="返回首页"><Brand /></button><nav className="desktop-navigation" aria-label="主导航">{primaryNav.map(group => <div className={`nav-group ${page === group.id || (group.name === '更多' && page === 'admin') ? 'active' : ''}`} key={group.name}><button onClick={() => navigate(group.id, group.name)}>{group.name}{'items' in group && <ChevronDown size={14} />}</button>{'items' in group && <div className="nav-dropdown">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.role === 'admin' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav><div className="topbar-right"><span className="class-name">{session.classroom.name}</span><button className="header-alert icon-btn" aria-label="查看提醒" onClick={() => navigate('reminders', '提醒')}><Bell size={19} />{reminderCount>0&&<span className="notification-badge">{Math.min(reminderCount,9)}</span>}</button><button className="profile-trigger" onClick={() => navigate('settings', '班级设置')} aria-label="班级设置"><span className="avatar">{session.user.nickname.slice(-2)}</span><span>{session.user.nickname}</span></button><button className="menu-trigger icon-btn" aria-label={drawerOpen ? '关闭导航' : '打开导航'} aria-expanded={drawerOpen} onClick={() => setDrawerOpen(!drawerOpen)}>{drawerOpen ? <X size={23} /> : <Menu size={23} />}</button></div></div></header>
     {drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)}><nav className="mobile-drawer" aria-label="手机导航" onClick={e => e.stopPropagation()}><div className="drawer-heading"><span>{session.classroom.name}</span><button className="icon-btn" onClick={() => setDrawerOpen(false)} aria-label="关闭导航"><X size={20} /></button></div>{primaryNav.map(group => <div className="drawer-group" key={group.name}><button className="drawer-primary" onClick={() => navigate(group.id, group.name)}>{group.name}<ChevronRight size={17} /></button>{'items' in group && <div className="drawer-items">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.role === 'admin' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav></div>}
     <div className="main-shell">{page !== 'ai' && <div className="breadcrumb"><button onClick={() => navigate('ai', '首页')}>首页</button><ChevronRight size={15} /><span>{section}</span></div>}
       {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="关闭错误"><X size={16} /></button></div>}
       <main className="main-content">
-        {page === 'ai' && <ChatView session={session} tasks={tasks} loading={loading} onTask={prepareTask} onNotice={showNotice} onPage={setPage} onAction={setPending} onDraft={value => { setTransferredDraft(value); setPage('admin') }} onRefresh={refresh} />}
+        {page === 'ai' && <><ReminderBanner onOpen={()=>navigate('reminders','提醒')} onCount={setReminderCount}/><ChatView session={session} tasks={tasks} loading={loading} onTask={prepareTask} onNotice={showNotice} onPage={setPage} onAction={setPending} onDraft={value => { setTransferredDraft(value); setPage('admin') }} onRefresh={refresh} /></>}
         {page === 'tasks' && <TasksPage tasks={tasks} loading={loading} onTask={prepareTask} onNotice={showNotice} />}
+        {page === 'academics' && <AcademicsPage session={session} onError={setError} />}
+        {page === 'calendar' && <CalendarPage session={session} onError={setError} />}
+        {page === 'votes' && <VotesPage session={session} onError={setError} />}
+        {page === 'reminders' && <RemindersPage session={session} onError={setError} />}
         {page === 'notices' && <NoticesPage notices={notices} loading={loading} category={noticeCategory} onNotice={setSelectedNotice} />}
         {page === 'admin' && session.user.role === 'admin' && <AdminPage initialDraft={transferredDraft} onConsumeDraft={() => setTransferredDraft(null)} tasks={tasks} notices={notices} onRefresh={refresh} onNotice={setSelectedNotice} onError={setError} />}
         {page === 'settings' && <SettingsPage session={session} tasks={tasks} completed={completed} onLogout={logout} onSession={setSession} onNotify={setToast} onError={setError} onAdmin={() => setPage('admin')} />}
@@ -140,6 +154,13 @@ export default function App() {
 }
 
 function Brand() { return <div className="brand"><div className="brand-mark"><Sparkles size={23} strokeWidth={1.8} /></div><strong>{BRAND.name}</strong></div> }
+function ReminderBanner({onOpen,onCount}:{onOpen:()=>void;onCount:(value:number)=>void}){
+ const [items,setItems]=useState<Array<{key:string;message:string;dueDate:string}>>([])
+ const [expanded,setExpanded]=useState(false)
+ useEffect(()=>{api<{reminders:Array<{key:string;message:string;dueDate:string}>}>('/reminders').then(result=>{setItems(result.reminders);onCount(result.reminders.length)}).catch(()=>setItems([]))},[])
+ if(!items.length)return null
+ return <section className="reminder-banner" aria-label="近期提醒"><div className="reminder-banner-head"><Bell size={18}/><strong>近期提醒</strong><button onClick={onOpen}>查看全部<ArrowRight size={14}/></button></div>{items.slice(0,expanded?items.length:3).map(item=><div className="reminder-banner-row" key={item.key}><span>{item.message}</span><time>{item.dueDate}</time></div>)}{items.length>3&&<button className="reminder-more" onClick={()=>setExpanded(!expanded)}>{expanded?'收起':`还有 ${items.length-3} 条`}</button>}</section>
+}
 function Welcome({ onSignIn }: { onSignIn: (s: Session) => void }) {
   const [mode, setMode] = useState<'join' | 'create'>('join')
   const [identifierKind, setIdentifierKind] = useState<'nickname' | 'studentNo'>('nickname')
