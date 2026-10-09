@@ -51,7 +51,7 @@ export default function App() {
   const identityRef = useRef<string | undefined>(undefined)
   identityRef.current = session?.user.id
 
-  useEffect(() => { api<Session>('/session').then(setSession).catch(() => {}).finally(() => setBooting(false)) }, [])
+  useEffect(() => { api<Session>('/session').then(value => { if (value.classroom.isDemo) { void api('/session', { method: 'DELETE' }); setSession(null) } else setSession(value) }).catch(() => {}).finally(() => setBooting(false)) }, [])
   useEffect(() => {
     if (!session) return
     void refresh(true)
