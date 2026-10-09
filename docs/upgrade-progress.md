@@ -12,3 +12,6 @@
 - 姓名或学号配合邀请码登录已有成员；名单外默认403，姓名/学号冲突409；开启自行加入也只能产生成员角色。
 - 删除恢复入口/弹窗/设置说明及响应凭证；恢复API返回404。legacy recovery_hash仅随机占位，从未用于认证。
 - RED：身份复用、恢复移除、名单策略测试失败；GREEN：pnpm build成功、pnpm test53/53通过、pnpm check:server通过。
+- Race test: two simultaneous overlapping imports both return 200, import each unique row once, and report one skipped conflict.
+- Populated local Wrangler D1 migration check: 0001-0004 applied; PRAGMA foreign_key_check returned no rows; legacy member ID, nickname, student number, note, notice author ID, and session reference survived.
+- Stage 3 checks: pnpm build passed; pnpm test 58/58 passed; pnpm check:server passed.

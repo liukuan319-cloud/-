@@ -31,9 +31,9 @@ export async function importMembers(env:Env,id:Identity,input:unknown){
   if(columns.some(v=>!v)||new Set(columns).size!==columns.length)throw new HTTPException(400,{message:'表头须为 name,student_no,role,note（或姓名,学号,角色,备注），不可重复。'});
  }
  if(rows.length>500)throw new HTTPException(400,{message:'每次最多导入500人。'});
- const existing=(await env.DB.prepare('SELECT nickname,student_no FROM members WHERE class_id=?').bind(id.user.classId).all<{nickname:string;student_no:string|null}>()).results;
+ const existing=(await env.DB.prepare('SELECT nickname,student_no FROM members WHERE deleted_at IS NULL AND class_id=?').bind(id.user.classId).all<{nickname:string;student_no:string|null}>()).results;
  const names=new Set(existing.map(m=>m.nickname)),numbers=new Set(existing.map(m=>m.student_no).filter(Boolean));
- const errors:{line:number;reason:string;kind:'skipped'|'failed'}[]=[],statements:D1PreparedStatement[]=[];
+ const errors:{line:number;reason:string;kind:'skipped'|'failed'}[]=[],statements:D1PreparedStatement[]=[],pendingLines:number[]=[];
  for(const row of rows){
   const parsed=rowSchema.safeParse(Object.assign({name:'',student_no:'',role:'',note:''},Object.fromEntries(columns.map((k,i)=>[k,row.cells[i]||'']))));
   if(row.cells.length>columns.length||!parsed.success){errors.push({line:row.line,reason:row.cells.length>columns.length?'列数超出表头':parsed.error!.issues.map(i=>i.message).join('；'),kind:'failed'});continue;}
@@ -41,8 +41,9 @@ export async function importMembers(env:Env,id:Identity,input:unknown){
   const duplicate=r.student_no&&numbers.has(r.student_no)?'学号已存在':names.has(r.name)?'姓名已存在':'';
   if(duplicate){errors.push({line:row.line,reason:duplicate,kind:'skipped'});continue;}
   names.add(r.name);if(r.student_no)numbers.add(r.student_no);
-  statements.push(env.DB.prepare('INSERT INTO members(id,class_id,nickname,student_no,role,note,recovery_hash,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(uuid(),id.user.classId,r.name,r.student_no||null,['admin','班干部'].includes(r.role)?'admin':'student',r.note,await hash(secret()),now()));
+  pendingLines.push(row.line);statements.push(env.DB.prepare('INSERT INTO members(id,class_id,nickname,student_no,role,note,recovery_hash,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(uuid(),id.user.classId,r.name,r.student_no||null,['admin','班干部'].includes(r.role)?'admin':'student',r.note,await hash(secret()),now()));
  }
- if(statements.length)await env.DB.batch(statements);
- return {total:rows.length,imported:statements.length,skipped:errors.filter(e=>e.kind==='skipped').length,failed:errors.filter(e=>e.kind==='failed').length,errors};
+ let imported=0;
+ if(statements.length){const results=await env.DB.batch(statements);for(let i=0;i<results.length;i++){if(results[i].meta.changes)imported++;else errors.push({line:pendingLines[i],reason:'姓名或学号已存在（同时导入）',kind:'skipped'});}}
+ return {total:rows.length,imported,skipped:errors.filter(e=>e.kind==='skipped').length,failed:errors.filter(e=>e.kind==='failed').length,errors};
 }

@@ -19,7 +19,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const results = statements.map(s => s.execute()); this.db.exec('COMMIT'); return results } catch (e) { this.db.exec('ROLLBACK'); throw e } }
 }
@@ -148,9 +148,66 @@ describe('join policy',()=>{
   await request('/class/settings','PATCH',{allowSelfJoin:false},owner.cookie);
   expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'另一位'})).status).toBe(403);
   expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'新同学'})).status).toBe(200);
+  await request('/class/settings','PATCH',{allowSelfJoin:true},owner.cookie);expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,studentNo:'99999'})).status).toBe(403);
  });
  it('rejects conflicting name and student number instead of choosing an identity',async()=>{
   const owner=await signup();await request('/class/members/import','POST',{text:'同学甲,001\n同学乙,002'},owner.cookie);
   expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'同学甲',studentNo:'002'})).status).toBe(409);
  });
+})
+
+describe('member administration',()=>{
+ it('changes roles, revokes sessions and protects the last administrator',async()=>{
+  const owner=await signup(), student=await join(owner);
+  expect((await request(`/class/members/${owner.user.id}`,'PATCH',{role:'student'},owner.cookie)).status).toBe(409);
+  expect((await request(`/class/members/${owner.user.id}`,'DELETE',{},owner.cookie)).status).toBe(409);
+  expect((await request(`/class/members/${owner.user.id}`,'PATCH',{role:'student'},student.cookie)).status).toBe(403);
+  expect((await request(`/class/members/${student.user.id}`,'PATCH',{role:'admin'},owner.cookie)).status).toBe(200);
+  expect((await request('/session','GET',undefined,student.cookie)).status).toBe(401);
+  const newAdmin=await join(owner);
+  const responses=await Promise.all([request(`/class/members/${owner.user.id}`,'PATCH',{role:'student'},newAdmin.cookie),request(`/class/members/${newAdmin.user.id}`,'PATCH',{role:'student'},owner.cookie)]);
+  expect(responses.filter(r=>r.status===200)).toHaveLength(1);expect([401,403,409]).toContain(responses.find(r=>r.status!==200)!.status);
+  expect(db.db.prepare("SELECT count(*) count FROM members WHERE role='admin' AND deleted_at IS NULL").get()!.count).toBe(1);
+ });
+ it('removes members from login/roster/statistics but preserves authorship and references',async()=>{
+  const owner=await signup();await request('/class/members/import','POST',{text:'同学甲,001'},owner.cookie);const student=await join(owner);const pub=await publish(owner);const task=(await getTasks(student))[0];const action=await taskAction(student,task);await request(`/actions/${action.id}/confirm`,'POST',{},student.cookie);
+  await request(`/class/members/${student.user.id}`,'PATCH',{role:'admin'},owner.cookie);const author=await join(owner);await publish(author);
+  expect((await request(`/class/members/${student.user.id}`,'DELETE',{},owner.cookie)).status).toBe(200);
+  expect((await request('/session','GET',undefined,author.cookie)).status).toBe(401);
+  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,studentNo:'001'})).status).toBe(403);
+  const roster=await (await request('/members','GET',undefined,owner.cookie)).json() as any;expect(roster.members).toHaveLength(1);
+  const progress=await (await request(`/tasks/${task.id}/progress`,'GET',undefined,owner.cookie)).json() as any;expect(progress.total).toBe(1);
+  expect(db.db.prepare('SELECT count(*) count FROM task_status WHERE member_id=?').get(student.user.id)!.count).toBe(1);
+  const ns=await (await request('/notices','GET',undefined,owner.cookie)).json() as any;expect(ns.notices.some((n:any)=>n.authorName==='同学甲')).toBe(true);
+  expect(await (await request('/class/members/import','POST',{text:'同学甲,001'},owner.cookie)).json()).toMatchObject({imported:1});
+  const replacement=await join(owner);expect(replacement.user.id).not.toBe(student.user.id);
+  expect((await request(`/notices/${pub.noticeId}`,'GET',undefined,owner.cookie)).status).toBe(200);
+  expect(db.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+ });
+ it('does not modify another class member',async()=>{
+  const owner=await signup(),other=await signup('别班');
+  expect((await request(`/class/members/${other.user.id}`,'DELETE',{},owner.cookie)).status).toBe(404);
+  expect((await request(`/class/members/${other.user.id}`,'PATCH',{role:'student'},owner.cookie)).status).toBe(404);
+ });
+ it('handles two concurrent imports without rolling back other valid rows',async()=>{
+  const owner=await signup();const responses=await Promise.all([request('/class/members/import','POST',{text:'同学甲,001\n同学乙,002'},owner.cookie),request('/class/members/import','POST',{text:'同学甲,001\n同学丙,003'},owner.cookie)]);
+  expect(responses.map(r=>r.status)).toEqual([200,200]);const results=await Promise.all(responses.map(r=>r.json() as Promise<any>));expect(results.reduce((n,r)=>n+r.imported,0)).toBe(3);expect(results.reduce((n,r)=>n+r.skipped,0)).toBe(1);
+ })
+})
+
+
+describe('member migration compatibility',()=>{
+ it('preserves populated legacy foreign keys and active name uniqueness',()=>{
+  const legacy=new DatabaseSync(':memory:');try{
+   for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql'])legacy.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
+   legacy.prepare('INSERT INTO classes(id,name,invite_code,created_at) VALUES(?,?,?,?)').run('c','班级','CODE','now');
+   legacy.prepare('INSERT INTO members(id,class_id,nickname,role,recovery_hash,created_at,student_no,note) VALUES(?,?,?,?,?,?,?,?)').run('m','c','管理员','admin','hash','now','001','备注');
+   legacy.prepare('INSERT INTO sessions VALUES(?,?,?)').run('token','m','future');
+   legacy.prepare('INSERT INTO notices(id,class_id,author_id,title,content,source_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run('n','c','m','旧通知','正文','2026-10-09','now','now');
+   legacy.exec('BEGIN');legacy.exec(readFileSync(new URL('../migrations/0004_member_removal.sql',import.meta.url),'utf8'));legacy.exec('COMMIT');
+   expect(legacy.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+   expect(legacy.prepare('SELECT nickname,student_no,note FROM members').get()).toMatchObject({nickname:'管理员',student_no:'001',note:'备注'});
+   expect(legacy.prepare('SELECT author_id FROM notices').get()!.author_id).toBe('m');expect(legacy.prepare('SELECT member_id FROM sessions').get()!.member_id).toBe('m');
+  }finally{legacy.close()}
+ })
 })
