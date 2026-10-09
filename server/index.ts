@@ -61,7 +61,7 @@ app.delete('/api/chat',async c=>{const id=await identity(c);await c.env.DB.prepa
 app.post('/api/chat',async c=>{
  const id=await identity(c);await limit(c.env,'chat:'+id.user.id,15,60);await limit(c.env,'chat-day:'+id.user.id,100,86400);
  const raw=await json(c);const b=z.object({message:z.string().trim().min(1).max(12000),sourceDate:dateSchema.optional(),history:z.unknown().optional(),data:z.unknown().optional()}).parse(raw);const currentMode=mode(c.env,id);
- if(currentMode==='unconfigured')throw new HTTPException(503,{message:'尚未配置真实模型 API。你仍可手动发布通知、查看待办，或进入示例班级。'});
+ if(currentMode==='unconfigured')throw new HTTPException(503,{message:'当前班级尚未配置 AI 服务。你仍可手动发布通知、查看待办。'});
  if('history' in raw || 'data' in raw){
   if(currentMode==='demo')throw new HTTPException(503,{message:'示例班级仅支持网页演示模式。'});
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),45000);
