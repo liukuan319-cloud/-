@@ -16,7 +16,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const result = statements.map(s => s.execute()); this.db.exec('COMMIT'); return result } catch (error) { this.db.exec('ROLLBACK'); throw error } }
 }

@@ -23,14 +23,14 @@ export async function logout(c:Context<AppBindings>){const token=getCookie(c,'cl
 export async function identity(c:Context<AppBindings>):Promise<Identity>{
  const cached=c.get('identity');if(cached)return cached;
  const token=getCookie(c,'class_session');if(!token)throw new HTTPException(401,{message:'请先加入班级或体验示例班级。'});
- const row=await c.env.DB.prepare(`SELECT m.id,m.class_id,m.nickname,m.role,c.name,c.invite_code,c.is_demo FROM sessions s JOIN members m ON m.id=s.member_id JOIN classes c ON c.id=m.class_id WHERE s.token_hash=? AND s.expires_at>?`).bind(await hash(token),now()).first<any>();
- if(!row)throw new HTTPException(401,{message:'登录已失效，请使用恢复码重新登录。'});
- return {user:{id:row.id,classId:row.class_id,nickname:row.nickname,role:row.role},classroom:{id:row.class_id,name:row.name,isDemo:!!row.is_demo,...(row.role==='admin'?{inviteCode:row.invite_code}:{})}};
+ const row=await c.env.DB.prepare(`SELECT m.id,m.class_id,m.nickname,m.role,c.name,c.invite_code,c.is_demo,c.allow_self_join FROM sessions s JOIN members m ON m.id=s.member_id JOIN classes c ON c.id=m.class_id WHERE s.token_hash=? AND s.expires_at>?`).bind(await hash(token),now()).first<any>();
+ if(!row)throw new HTTPException(401,{message:'登录已失效，请使用姓名或学号及班级邀请码重新登录。'});
+ return {user:{id:row.id,classId:row.class_id,nickname:row.nickname,role:row.role},classroom:{id:row.class_id,name:row.name,isDemo:!!row.is_demo,...(row.role==='admin'?{inviteCode:row.invite_code,allowSelfJoin:!!row.allow_self_join}:{})}};
 }
 export async function identityForMember(env:Env,memberId:string):Promise<Identity>{
- const row=await env.DB.prepare('SELECT m.id,m.class_id,m.nickname,m.role,c.name,c.invite_code,c.is_demo FROM members m JOIN classes c ON c.id=m.class_id WHERE m.id=?').bind(memberId).first<any>();
+ const row=await env.DB.prepare('SELECT m.id,m.class_id,m.nickname,m.role,c.name,c.invite_code,c.is_demo,c.allow_self_join FROM members m JOIN classes c ON c.id=m.class_id WHERE m.id=?').bind(memberId).first<any>();
  if(!row)throw new HTTPException(401,{message:'成员不存在。'});
- return {user:{id:row.id,classId:row.class_id,nickname:row.nickname,role:row.role},classroom:{id:row.class_id,name:row.name,isDemo:!!row.is_demo,...(row.role==='admin'?{inviteCode:row.invite_code}:{})}};
+ return {user:{id:row.id,classId:row.class_id,nickname:row.nickname,role:row.role},classroom:{id:row.class_id,name:row.name,isDemo:!!row.is_demo,...(row.role==='admin'?{inviteCode:row.invite_code,allowSelfJoin:!!row.allow_self_join}:{})}};
 }
 export function admin(id:Identity){if(id.user.role!=='admin')throw new HTTPException(403,{message:'此操作仅限班干部。'});}
 export function mode(env:Env,id:Identity){return id.classroom.isDemo?'demo':(env.AI_API_KEY||env.API_KEY)?'live':'unconfigured';}

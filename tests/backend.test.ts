@@ -19,7 +19,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const results = statements.map(s => s.execute()); this.db.exec('COMMIT'); return results } catch (e) { this.db.exec('ROLLBACK'); throw e } }
 }
@@ -37,6 +37,7 @@ async function signup(name = '测试班级', nickname = '班干部') {
   return { ...(await response.json()) as any, cookie: response.headers.get('set-cookie')!.split(';')[0], response }
 }
 async function join(owner: any, nickname = '同学甲') {
+  await request('/class/members/import','POST',{text:nickname},owner.cookie)
   const response = await request('/join', 'POST', { inviteCode: owner.classroom.inviteCode, nickname })
   expect(response.status).toBe(200)
   return { ...(await response.json()) as any, cookie: response.headers.get('set-cookie')!.split(';')[0] }
@@ -77,8 +78,8 @@ describe('identity and authentication', () => {
     expect(read.user.id).toBe(owner.user.id); expect(read.recoveryCode).toBeUndefined()
   })
   it('joins as a student and does not disclose the class invitation', async () => { const owner = await signup(); const student = await join(owner); expect(student.user.role).toBe('student'); expect(student.classroom.inviteCode).toBeUndefined() })
-  it('rejects a duplicate nickname instead of entering another identity', async () => { const owner = await signup(); await join(owner); expect((await request('/join', 'POST', { inviteCode: owner.classroom.inviteCode, nickname: '同学甲' })).status).toBe(409) })
-  it('recovers the same identity and rejects an invalid recovery code', async () => { const owner = await signup(); const recovered = await request('/session/recover', 'POST', { recoveryCode: owner.recoveryCode }); expect(recovered.status).toBe(200); expect((await recovered.json() as any).user.id).toBe(owner.user.id); expect((await request('/session/recover', 'POST', { recoveryCode: 'x'.repeat(64) })).status).toBe(401) })
+  it('reuses the allowlisted identity by name or student number and rejects strangers', async () => { const owner = await signup(); await request('/class/members/import','POST',{text:'同学甲,202601'},owner.cookie); const student=await join(owner); const r=await request('/join','POST',{inviteCode:owner.classroom.inviteCode,studentNo:'202601'}); expect(r.status).toBe(200); expect((await r.json() as any).user.id).toBe(student.user.id); expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'陌生人'})).status).toBe(403); expect(db.db.prepare('SELECT count(*) count FROM members').get()!.count).toBe(2) })
+  it('removes recovery credentials and disables recovery endpoint', async () => { const owner = await signup(); expect(owner.recoveryCode).toBeUndefined(); expect((await request('/session/recover', 'POST', { recoveryCode: 'x'.repeat(64) })).status).toBe(404); const demo=await (await request('/demo','POST',{role:'admin'})).json() as any; expect(demo.recoveryCode).toBeUndefined() })
   it('revokes the current session on logout', async () => { const owner = await signup(); expect((await request('/session', 'DELETE', undefined, owner.cookie)).status).toBe(200); expect((await request('/session', 'GET', undefined, owner.cookie)).status).toBe(401) })
   it('rotates invitation codes without removing existing members', async () => { const owner = await signup(); const student = await join(owner); const response = await request('/invite/rotate', 'POST', {}, owner.cookie); expect(response.status).toBe(200); expect((await request('/join', 'POST', { inviteCode: owner.classroom.inviteCode, nickname: '后来同学' })).status).toBe(404); expect((await request('/session', 'GET', undefined, student.cookie)).status).toBe(200) })
   it('blocks cross-origin mutations and invalid JSON', async () => { expect((await request('/classes', 'POST', { name: 'X', nickname: 'Y' }, undefined, { Origin: 'https://evil.example' })).status).toBe(403); const response = await app.request('https://class.test/api/classes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bad' }, env); expect(response.status).toBe(400) })
@@ -135,4 +136,21 @@ describe('member import', () => {
     expect((await request('/class/members/import','POST',{text:'name,name\n学生,学生'},owner.cookie)).status).toBe(400)
     for (const user of [owner,other]) expect(await (await request('/class/members/import','POST',{text:'学生,1'},user.cookie)).json()).toMatchObject({imported:1})
   })
+})
+
+
+describe('join policy',()=>{
+ it('only admins may enable self join; new identities remain students',async()=>{
+  const owner=await signup();const student=await join(owner);
+  expect((await request('/class/settings','PATCH',{allowSelfJoin:true},student.cookie)).status).toBe(403);
+  expect((await request('/class/settings','PATCH',{allowSelfJoin:true},owner.cookie)).status).toBe(200);
+  const r=await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'新同学',role:'admin'});expect(r.status).toBe(200);expect((await r.json() as any).user.role).toBe('student');
+  await request('/class/settings','PATCH',{allowSelfJoin:false},owner.cookie);
+  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'另一位'})).status).toBe(403);
+  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'新同学'})).status).toBe(200);
+ });
+ it('rejects conflicting name and student number instead of choosing an identity',async()=>{
+  const owner=await signup();await request('/class/members/import','POST',{text:'同学甲,001\n同学乙,002'},owner.cookie);
+  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'同学甲',studentNo:'002'})).status).toBe(409);
+ });
 })

@@ -1,8 +1,7 @@
 export interface Session {
   user: { id: string; nickname: string; role: 'admin' | 'student'; classId: string }
-  classroom: { id: string; name: string; inviteCode?: string; isDemo: boolean }
+  classroom: { id: string; name: string; inviteCode?: string; allowSelfJoin?: boolean; isDemo: boolean }
   mode: 'demo' | 'live' | 'unconfigured'
-  recoveryCode?: string
 }
 export interface Task { id: string; noticeId: string; title: string; description: string; dueAt: string | null; status: 'pending' | 'completed'; version: number; noticeTitle: string; audience: 'all' | 'selected' }
 export interface Notice { id: string; title: string; content: string; sourceDate: string; createdAt: string; updatedAt: string; version: number; status: 'published' | 'withdrawn'; authorName: string }

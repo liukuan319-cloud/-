@@ -1,0 +1,1 @@
+ALTER TABLE classes ADD COLUMN allow_self_join INTEGER NOT NULL DEFAULT 0;
