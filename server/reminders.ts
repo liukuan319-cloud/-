@@ -11,7 +11,8 @@ const kinds = Object.keys(defaults) as Kind[];
 function dayDistance(date: string) {
   return Math.round((Date.parse(date.slice(0,10)+'T00:00:00+08:00')-Date.parse(beijingDate()+'T00:00:00+08:00'))/86400000);
 }
-function weekday(date: string) { return ['周日','周一','周二','周三','周四','周五','周六'][new Date(date+'T00:00:00+08:00').getDay()]; }
+function weekday(date: string) { return ['周日','周一','周二','周三','周四','周五','周六'][new Date(date+'T00:00:00Z').getUTCDay()]; }
+function futureDate(days: number) { return new Date(Date.parse(beijingDate()+'T00:00:00Z')+days*86400000).toISOString().slice(0,10); }
 
 export async function reminderRules(env: Env, id: Identity) {
   const result = await env.DB.prepare('SELECT type,enabled,days_before AS daysBefore FROM reminders WHERE class_id=?').bind(id.user.classId).all<any>();
@@ -28,18 +29,22 @@ export async function saveReminderRules(env: Env, id: Identity, input: unknown) 
 
 export async function memberReminders(env: Env, id: Identity) {
   const rules = new Map((await reminderRules(env,id)).map(row=>[row.type,row]));
-  const [examResult,noticeResult,schedule,mine] = await Promise.all([
+  const [examResult,activityResult,schedule,mine] = await Promise.all([
     env.DB.prepare('SELECT id,name,registration_deadline AS registrationDeadline,exam_at AS examAt FROM exams WHERE class_id=?').bind(id.user.classId).all<any>(),
-    env.DB.prepare("SELECT id,title,category_id AS categoryId,source_date AS sourceDate FROM notices WHERE class_id=? AND status='published'").bind(id.user.classId).all<any>(),
+    env.DB.prepare("SELECT id FROM notices WHERE class_id=? AND status='published' AND category_id='activity'").bind(id.user.classId).all<{id:string}>(),
     getSchedule(env,id),tasks(env,id),
   ]);
   const result:Array<{key:string;type:Kind;message:string;dueDate:string}> = [];
   const add=(type:Kind,key:string,message:string,date:string)=>{const rule=rules.get(type);if(rule?.enabled && dayDistance(date)>=0 && dayDistance(date)<=rule.daysBefore) result.push({key,type,message,dueDate:date});};
   for(const exam of examResult.results){add('exam',`exam:${exam.id}`,`${exam.name}将于${exam.examAt.slice(0,16).replace('T',' ')}举行`,exam.examAt);if(exam.registrationDeadline)add('registration',`registration:${exam.id}`,`${exam.name}报名即将截止`,exam.registrationDeadline);}
   for(const task of mine)if(task.status==='pending'&&task.dueAt)add('task',`task:${task.id}`,`待办「${task.title}」即将截止`,task.dueAt);
-  for(const notice of noticeResult.results)if(notice.categoryId==='activity')add('activity',`activity:${notice.id}`,`活动通知「${notice.title}」请及时查看`,notice.sourceDate);
-  const tomorrow=new Date(Date.parse(beijingDate()+'T00:00:00Z')+86400000).toISOString().slice(0,10);
-  for(const duty of schedule.duty)if(duty.name===id.user.nickname&&duty.day===weekday(tomorrow))add('duty',`duty:${tomorrow}:${duty.name}`,`明天轮到你值日`,tomorrow);
+  const activities=new Set(activityResult.results.map(row=>row.id));
+  for(const task of mine)if(task.status==='pending'&&task.dueAt&&activities.has(task.noticeId))add('activity',`activity:${task.id}`,`活动报名「${task.title}」即将截止`,task.dueAt);
+  const dutyWindow=rules.get('duty')?.daysBefore??defaults.duty;
+  for(let offset=0;offset<=dutyWindow;offset++){
+    const date=futureDate(offset);
+    for(const duty of schedule.duty)if(duty.name===id.user.nickname&&duty.day===weekday(date))add('duty',`duty:${date}:${duty.name}`,`${offset===0?'今天':offset===1?'明天':date}轮到你值日`,date);
+  }
   result.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
   if(result.length)await env.DB.batch(result.map(row=>env.DB.prepare('INSERT INTO reminders_log(class_id,member_id,reminder_key,message,due_date,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(member_id,reminder_key) DO NOTHING').bind(id.user.classId,id.user.id,row.key,row.message,row.dueDate,now())));
   return result;

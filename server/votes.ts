@@ -47,9 +47,9 @@ export async function castVote(env: Env, id: Identity, voteId: string, input: un
   const option = await env.DB.prepare('SELECT id FROM vote_options WHERE id=? AND vote_id=?').bind(optionId,voteId).first();
   if (!option) throw new HTTPException(400,{message:'选项不存在。'});
   const fingerprint = await hash(`${voteId}:${id.user.id}:${vote.salt}`);
-  const result = await env.DB.prepare('INSERT INTO vote_records(vote_id,voter_hash,member_id,option_id,created_at) VALUES(?,?,?,?,?) ON CONFLICT(vote_id,voter_hash) DO NOTHING')
-    .bind(voteId,fingerprint,vote.anonymous?null:id.user.id,optionId,now()).run();
-  if (!result.meta.changes) throw new HTTPException(409,{message:'你已经投过票。'});
+  const result = await env.DB.prepare("INSERT INTO vote_records(vote_id,voter_hash,member_id,option_id,created_at) SELECT v.id,?,?,?,? FROM votes v WHERE v.id=? AND v.class_id=? AND v.ended_at IS NULL AND unixepoch(v.closes_at)>unixepoch('now') AND EXISTS(SELECT 1 FROM vote_options o WHERE o.id=? AND o.vote_id=v.id) ON CONFLICT(vote_id,voter_hash) DO NOTHING")
+    .bind(fingerprint,vote.anonymous?null:id.user.id,optionId,now(),voteId,id.user.classId,optionId).run();
+  if (!result.meta.changes) throw new HTTPException(409,{message:'你已经投过票，或投票已结束。'});
   return { ok:true };
 }
 

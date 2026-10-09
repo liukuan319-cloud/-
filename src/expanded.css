@@ -2,3 +2,12 @@
 @media(max-width:760px){.feature-grid{grid-template-columns:1fr}.feature-form-grid{grid-template-columns:1fr 1fr}.feature-timetable{display:flex;overflow:auto}.feature-timetable>div{min-width:130px}.feature-vote-option{grid-template-columns:1fr}.feature-vote-meta{display:grid;gap:5px}.feature-panel{padding:16px}.feature-heading h1{font-size:24px}}
 .reminder-banner{background:#fff;border:1px solid #e7e7eb;border-radius:18px;padding:14px 20px;margin-bottom:20px;box-shadow:0 2px 12px #0000000d}.reminder-banner-head,.reminder-banner-row{display:flex;align-items:center;gap:10px}.reminder-banner-head{color:#248d70}.reminder-banner-head button{margin-left:auto;display:flex;gap:5px;align-items:center;color:#248d70}.reminder-banner-row{justify-content:space-between;padding:9px 0;border-bottom:1px solid #f1f1f3}.reminder-banner-row:last-child{border:0}.reminder-banner-row time{white-space:nowrap;color:#86868b;font-size:12px}.reminder-more{margin-top:8px;color:#248d70}.header-alert{position:relative}.notification-badge{position:absolute;top:-3px;right:-5px;background:#e74b57;color:#fff;border-radius:999px;font-size:10px;min-width:16px;height:16px;display:grid;place-items:center}
 @media(prefers-reduced-motion:reduce){.feature-skeleton span{animation:none}.feature-ring,.feature-bar i,.feature-score i{transition:none}}
+.feature-ring{position:relative;background:none;flex:none}
+.feature-ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.feature-ring circle{fill:none;stroke-width:11}
+.feature-ring-track{stroke:#e7ecea}
+.feature-ring-value{stroke:url(#academic-ring);stroke-linecap:round;transition:stroke-dashoffset 800ms ease-out}
+.feature-ring>div{position:absolute;inset:15px;width:auto;height:auto}
+.feature-csv{display:grid;gap:8px;margin:14px 0}
+.feature-csv input[type=file]{max-width:100%;background:#fff}
+@media(max-width:760px){.feature-timetable{display:grid;grid-template-columns:1fr;overflow:visible}.feature-timetable>div{min-width:0;min-height:0;display:grid;grid-template-columns:66px 1fr;align-items:center;gap:8px}.feature-timetable h3{margin:0}.feature-form-grid{grid-template-columns:1fr}.feature-row{gap:12px}.feature-ring{width:110px;height:110px}.feature-ring>div{inset:12px}.feature-ring strong{font-size:22px}}

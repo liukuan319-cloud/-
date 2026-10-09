@@ -6,13 +6,13 @@ import type { Action, ChatCard, Draft, DraftTask, Member, Message, Notice, Notic
 import { BRAND } from './config'
 import { AcademicsPage, CalendarPage, VotesPage, RemindersPage } from './ExpandedPages'
 
-type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'academics' | 'calendar' | 'votes' | 'reminders' | 'placeholder'
+type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'academics' | 'calendar' | 'votes' | 'reminders'
 const primaryNav = [
   { id: 'ai' as const, name: '首页' },
   { id: 'notices' as const, name: '通知', items: ['全部', '重要公告', '组队通知', '考证考试', '活动报名', '日常事务'] },
   { id: 'academics' as const, name: '学业', items: ['学业概览', '课程表', '考试安排'] },
   { id: 'settings' as const, name: '班级', items: ['班级概览', '日历', '投票', '提醒', '成员名单', '班级设置'] },
-  { id: 'placeholder' as const, name: '更多', items: ['投票与接龙', '日程提醒', '资料库'] },
+  { id: 'tasks' as const, name: '更多', items: ['我的待办', '站内提醒', '班级设置'] },
 ] as const
 const uid = () => crypto.randomUUID()
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
@@ -97,11 +97,8 @@ export default function App() {
     else if (item === '课程表' || item === '考试安排') navigate('calendar', item)
     else if (item === '日历') navigate('calendar', item)
     else if (item === '投票') navigate('votes', item)
-    else if (item === '提醒') navigate('reminders', item)
-    else if (item === '投票与接龙') navigate('votes', item)
-    else if (item === '日程提醒') navigate('reminders', item)
-    else if (item === '班级设置') navigate('settings', item)
-    else navigate('placeholder', item)
+    else if (item === '提醒' || item === '站内提醒') navigate('reminders', item)
+    else if (item === '班级设置' || item === '班级概览' || item === '成员名单') navigate('settings', item)
   }
   async function logout() { try { await api('/session', { method: 'DELETE' }); setSession(null); setTasks([]); setNotices([]) } catch (e) { setError((e as Error).message) } }
   async function prepareTask(task: Task) {
@@ -142,7 +139,6 @@ export default function App() {
         {page === 'notices' && <NoticesPage notices={notices} loading={loading} category={noticeCategory} onNotice={setSelectedNotice} />}
         {page === 'admin' && session.user.role === 'admin' && <AdminPage initialDraft={transferredDraft} onConsumeDraft={() => setTransferredDraft(null)} tasks={tasks} notices={notices} onRefresh={refresh} onNotice={setSelectedNotice} onError={setError} />}
         {page === 'settings' && <SettingsPage session={session} tasks={tasks} completed={completed} onLogout={logout} onSession={setSession} onNotify={setToast} onError={setError} onAdmin={() => setPage('admin')} />}
-        {page === 'placeholder' && <div className="standard-page placeholder-page"><PageHeading eyebrow="班枢" title={section} text="这个栏目即将开放。" /><div className="panel"><p>班级内容正在整理中。</p><Button variant="outline" onClick={() => navigate('ai', '首页')}>返回首页<ArrowRight size={16} /></Button></div></div>}
       </main>
       <footer className="page-footer"><ShieldCheck size={13} />回答有来源，操作由你确认<span>与你一起，把班级事务变简单</span></footer>
     </div>
