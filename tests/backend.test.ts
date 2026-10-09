@@ -19,7 +19,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { this.db.exec(readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const results = statements.map(s => s.execute()); this.db.exec('COMMIT'); return results } catch (e) { this.db.exec('ROLLBACK'); throw e } }
 }
@@ -113,4 +113,26 @@ describe('business permissions and confirmations', () => {
 describe('validation and date boundaries', () => {
   it('requires a real source date and timezone-aware deadlines', () => { expect(draftSchema.safeParse(draft({ sourceDate: '2026-02-30' })).success).toBe(false); expect(draftSchema.safeParse(draft({ tasks: [{ ...draft().tasks[0], dueAt: '2026-10-12T18:00:00' }] })).success).toBe(false); expect(draftSchema.safeParse(draft({ tasks: [{ ...draft().tasks[0], dueAt: null }] })).success).toBe(true) })
   it('escapes calendar newlines and folds Chinese lines to at most 75 UTF-8 bytes', () => { const text = calendar({ id: 'x', title: '运动会报名'.repeat(30), description: 'a,b;c\\d\n下一行', dueAt: '2026-10-12T18:00:00+08:00' }); expect(text).toContain('DESCRIPTION:a\\,b\\;c\\\\d\\n下一行'); for (const line of text.split('\r\n')) expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(75) })
+})
+
+describe('member import', () => {
+  it('imports 50 usable members and skips duplicates with line reasons', async () => {
+    const owner = await signup()
+    const text = 'name,student_no,role,note\n' + Array.from({length:50}, (_,i)=>`学生${i},S${i},成员,备注${i}`).join('\n')
+    const res = await request('/class/members/import', 'POST', {text}, owner.cookie)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({imported:50,skipped:0,failed:0})
+    const again = await request('/class/members/import', 'POST', {text:'name,student_no,role,note\n不同名字,S0,成员,\n学生1,,成员,\n坏角色,S99,老师,\n"带,逗号",S100,班干部,"两行\n备注"'}, owner.cookie)
+    expect(await again.json()).toMatchObject({imported:1,skipped:2,failed:1,errors:expect.arrayContaining([expect.objectContaining({line:4})])})
+    const roster = await (await request('/members','GET',undefined,owner.cookie)).json() as any
+    expect(roster.members).toHaveLength(52)
+    expect(roster.members.find((m:any)=>m.studentNo==='S100')).toMatchObject({nickname:'带,逗号',role:'admin',note:'两行\n备注'})
+  })
+  it('requires admin and validates input/header while allowing the same number in another class', async () => {
+    const owner = await signup(), student = await join(owner), other = await signup('别班')
+    expect((await request('/class/members/import','POST',{text:'学生,1'},student.cookie)).status).toBe(403)
+    expect((await request('/class/members/import','POST',{text:''},owner.cookie)).status).toBe(400)
+    expect((await request('/class/members/import','POST',{text:'name,name\n学生,学生'},owner.cookie)).status).toBe(400)
+    for (const user of [owner,other]) expect(await (await request('/class/members/import','POST',{text:'学生,1'},user.cookie)).json()).toMatchObject({imported:1})
+  })
 })

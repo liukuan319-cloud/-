@@ -6,7 +6,7 @@ export interface Session {
 }
 export interface Task { id: string; noticeId: string; title: string; description: string; dueAt: string | null; status: 'pending' | 'completed'; version: number; noticeTitle: string; audience: 'all' | 'selected' }
 export interface Notice { id: string; title: string; content: string; sourceDate: string; createdAt: string; updatedAt: string; version: number; status: 'published' | 'withdrawn'; authorName: string }
-export interface Member { id: string; nickname: string; role: string; status?: string }
+export interface Member { id: string; nickname: string; role: string; studentNo?: string | null; note?: string; status?: string }
 export interface DraftTask { title: string; description: string; dueAt: string | null; audience: 'all' | 'selected'; memberIds: string[] }
 export interface Draft { title: string; content: string; sourceDate: string; tasks: DraftTask[] }
 export interface Action { id: string; type: string; payload: Record<string, unknown>; expiresAt?: string }

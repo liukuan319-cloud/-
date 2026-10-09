@@ -7,6 +7,7 @@ import { uuid,now,hash,secret,session,logout,identity,limit,mode,admin } from '.
 import { nicknameSchema,dateSchema,calendar,beijingDate } from './validation';
 import { tasks,notices,notice,members,validateDraft,makeAction,prepareStatus,progress,confirmAction,editNotice,adminTasks } from './business';
 import { demoChat,banshuChat } from './ai';
+import { importMembers } from './member-import';
 const app=new Hono<AppBindings>();
 app.use('/api/*',async(c,next)=>{
  c.header('Cache-Control','no-store');c.header('X-Content-Type-Options','nosniff');
@@ -40,6 +41,7 @@ app.delete('/api/session',async c=>{await logout(c);return c.json({ok:true});});
 app.post('/api/invite/rotate',async c=>{const id=await identity(c);admin(id);const code=secret().slice(0,10).toUpperCase();await c.env.DB.prepare('UPDATE classes SET invite_code=? WHERE id=?').bind(code,id.user.classId).run();return c.json({inviteCode:code});});
 app.get('/api/tasks',async c=>{const id=await identity(c);return c.json({tasks:await tasks(c.env,id)});});app.get('/api/admin/tasks',async c=>{const id=await identity(c);return c.json({tasks:await adminTasks(c.env,id)});});
 app.get('/api/notices',async c=>{const id=await identity(c);return c.json({notices:await notices(c.env,id)});});app.get('/api/notices/:id',async c=>{const id=await identity(c),n=await notice(c.env,id,c.req.param('id'));const ts=(await tasks(c.env,id)).filter(t=>t.noticeId===n.id);return c.json({notice:n,tasks:ts});});
+app.post('/api/class/members/import',async c=>c.json(await importMembers(c.env,await identity(c),await json(c))));
 app.get('/api/members',async c=>{const id=await identity(c);return c.json({members:await members(c.env,id)});});
 app.get('/api/tasks/:id/progress',async c=>{const id=await identity(c);return c.json(await progress(c.env,id,c.req.param('id')));});
 app.get('/api/tasks/:id/calendar.ics',async c=>{const id=await identity(c),ts=await tasks(c.env,id),t=ts.find(t=>t.id===c.req.param('id'));if(!t||!t.dueAt)throw new HTTPException(404,{message:'任务没有可导出的截止时间。'});return c.body(calendar({id:t.id,title:t.title,description:t.description,dueAt:t.dueAt}),200,{'Content-Type':'text/calendar; charset=utf-8','Content-Disposition':`attachment; filename="task-${t.id}.ics"`});});

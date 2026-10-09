@@ -16,7 +16,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { this.db.exec(readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const result = statements.map(s => s.execute()); this.db.exec('COMMIT'); return result } catch (error) { this.db.exec('ROLLBACK'); throw error } }
 }
@@ -31,9 +31,9 @@ let db: SqliteD1
 let env: Env
 
 function seed() {
-  db.db.prepare('INSERT INTO classes VALUES(?,?,?,?,?)').run('class-1', '示例班', 'DEMO-1', 1, now)
-  db.db.prepare('INSERT INTO members VALUES(?,?,?,?,?,?)').run('admin-1', 'class-1', '班干部', 'admin', 'admin-hash', now)
-  db.db.prepare('INSERT INTO members VALUES(?,?,?,?,?,?)').run('student-1', 'class-1', '同学甲', 'student', 'student-hash', now)
+  db.db.prepare('INSERT INTO classes(id,name,invite_code,is_demo,created_at) VALUES(?,?,?,?,?)').run('class-1', '示例班', 'DEMO-1', 1, now)
+  db.db.prepare('INSERT INTO members(id,class_id,nickname,role,recovery_hash,created_at) VALUES(?,?,?,?,?,?)').run('admin-1', 'class-1', '班干部', 'admin', 'admin-hash', now)
+  db.db.prepare('INSERT INTO members(id,class_id,nickname,role,recovery_hash,created_at) VALUES(?,?,?,?,?,?)').run('student-1', 'class-1', '同学甲', 'student', 'student-hash', now)
   db.db.prepare('INSERT INTO notices VALUES(?,?,?,?,?,?,?,?,?,?)').run('notice-1', 'class-1', 'admin-1', '运动会报名通知', '请提交运动会报名表。', today, 'published', 1, now, now)
   db.db.prepare('INSERT INTO notice_versions VALUES(?,?,?,?,?)').run('notice-1', 1, '运动会报名通知', '请提交运动会报名表。', now)
   const overdueDate = '2020-01-01T12:00:00+08:00'
