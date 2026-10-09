@@ -5,8 +5,14 @@ import { api, post, formatDate, overdue, beijingInput, beijingISOString } from '
 import type { Action, ChatCard, Draft, DraftTask, Member, Message, Notice, Session, Task } from './api'
 import { BRAND } from './config'
 
-type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings'
-const nav = [{ id: 'ai', name: 'AI 助手', icon: MessageCircle }, { id: 'tasks', name: '我的待办', icon: ListTodo }, { id: 'notices', name: '班级通知', icon: Bell }, { id: 'admin', name: '发布与统计', icon: LayoutDashboard }, { id: 'settings', name: '班级与设置', icon: Settings2 }] as const
+type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'placeholder'
+const primaryNav = [
+  { id: 'ai' as const, name: '首页' },
+  { id: 'notices' as const, name: '通知', items: ['全部', '重要公告', '组队通知', '考证考试', '活动报名', '日常事务'] },
+  { id: 'tasks' as const, name: '学业', items: ['我的待办', '课程表', '考试安排'] },
+  { id: 'settings' as const, name: '班级', items: ['班级概览', '成员名单', '班级设置'] },
+  { id: 'placeholder' as const, name: '更多', items: ['投票与接龙', '日程提醒', '资料库'] },
+] as const
 const uid = () => crypto.randomUUID()
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 const blankTask = (): DraftTask => ({ title: '', description: '', dueAt: null, audience: 'all', memberIds: [] })
@@ -14,6 +20,9 @@ const blankDraft = (): Draft => ({ title: '', content: '', sourceDate: today(), 
 
 function Button({ children, busy, variant = 'primary', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; variant?: 'primary' | 'ghost' | 'outline' | 'danger' }) {
   return <button {...props} className={`btn ${variant} ${props.className || ''}`} disabled={props.disabled || busy}>{busy && <LoaderCircle size={16} className="spin" />}{children}</button>
+}
+function ProgressRing({ value }: { value: number }) {
+  return <div className="progress-ring" aria-label={`完成进度 ${value}%`}><svg viewBox="0 0 104 104" aria-hidden="true"><circle className="ring-track" cx="52" cy="52" r="43" /><circle className="ring-value" cx="52" cy="52" r="43" strokeDasharray={`${value * 2.702} 270.2`} /></svg><span>{value}%</span></div>
 }
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
@@ -37,7 +46,8 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [booting, setBooting] = useState(true)
   const [page, setPage] = useState<Page>('ai')
-  const [collapsed, setCollapsed] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [section, setSection] = useState('首页')
   const [tasks, setTasks] = useState<Task[]>([])
   const [notices, setNotices] = useState<Notice[]>([])
   const [loading, setLoading] = useState(false)
@@ -74,7 +84,14 @@ export default function App() {
     } catch (e) { if (identityRef.current === memberId && showLoading) setError((e as Error).message) }
     finally { refreshRunning.current = false; if (showLoading) setLoading(false) }
   }
-  function signedIn(value: Session) { setSession(value); setPage('ai') }
+  function signedIn(value: Session) { setSession(value); setPage('ai'); setSection('首页') }
+  function navigate(next: Page, label: string) { setPage(next); setSection(label); setDrawerOpen(false) }
+  function navigateItem(parent: string, item: string) {
+    if (parent === '通知') navigate(item === '全部' ? 'notices' : 'placeholder', item)
+    else if (item === '我的待办') navigate('tasks', item)
+    else if (item === '班级设置') navigate('settings', item)
+    else navigate('placeholder', item)
+  }
   async function logout() { try { await api('/session', { method: 'DELETE' }); setSession(null); setTasks([]); setNotices([]) } catch (e) { setError((e as Error).message) } }
   async function prepareTask(task: Task) {
     try {
@@ -99,16 +116,10 @@ export default function App() {
   const completed = tasks.length - remaining
   if (booting) return <div className="boot"><Brand /><LoaderCircle className="spin" /><span>正在准备你的班级空间…</span></div>
   if (!session) return <Welcome onSignIn={signedIn} />
-  return <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
-    <aside className="sidebar">
-      <Brand compact={collapsed} /><button className="collapse-button icon-btn" aria-label={collapsed ? '展开导航' : '收起导航'} onClick={() => setCollapsed(!collapsed)}><Menu size={17} /></button>
-      <div className="class-switch"><span className="class-icon"><BookOpen size={19} /></span><div><strong>{session.classroom.name}</strong><small>我们的班级空间</small></div><ChevronDown size={16} /></div>
-      <p className="nav-caption">我的工作台</p>
-      <nav aria-label="主导航">{nav.filter(n => n.id !== 'admin' || session.user.role === 'admin').map(({ id, name, icon: Icon }) => <button key={id} className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => setPage(id)} title={name}><Icon size={19} /><span>{name}</span>{id === 'tasks' && remaining > 0 && <b>{remaining}</b>}{id === 'ai' && <span className="tiny-spark"><Sparkles size={13} /></span>}</button>)}</nav>
-      <div className="sidebar-note"><div className="small-icon"><Leaf size={19} /></div><h4>班务小事，交给 AI</h4><p>让每一条重要通知<br />都成为清晰的下一步。</p><span>有来源 · 可确认 · 可追踪</span></div>
-      <button className="user-profile" onClick={() => setPage('settings')}><span className="avatar">{session.user.nickname.slice(-2)}</span><span><strong>{session.user.nickname}</strong><small>{session.user.role === 'admin' ? '班级管理员' : '班级成员'}</small></span><Settings2 size={17} /></button>
-    </aside>
-    <div className="main-shell"><header className="topbar"><div className="breadcrumb">我的工作台 <ChevronRight size={14} /><strong>{nav.find(n => n.id === page)?.name}</strong></div><div className="topbar-right"><span className="mode-pill live"><span />班级 AI</span><span className="date-label"><CalendarDays size={15} />{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short', timeZone: 'Asia/Shanghai' }).format(new Date())}</span><button className="icon-btn" aria-label="查看通知" onClick={() => setPage('notices')}><Bell size={19} /></button></div></header>
+  return <div className="app-shell">
+    <header className="site-header"><div className="topbar"><button className="brand-button" onClick={() => navigate('ai', '首页')} aria-label="返回首页"><Brand /></button><nav className="desktop-navigation" aria-label="主导航">{primaryNav.map(group => <div className={`nav-group ${page === group.id || (group.name === '更多' && page === 'admin') ? 'active' : ''}`} key={group.name}><button onClick={() => navigate(group.id, group.name)}>{group.name}{'items' in group && <ChevronDown size={14} />}</button>{'items' in group && <div className="nav-dropdown">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.role === 'admin' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav><div className="topbar-right"><span className="class-name">{session.classroom.name}</span><button className="header-alert icon-btn" aria-label="查看通知" onClick={() => navigate('notices', '全部')}><Bell size={19} /></button><button className="profile-trigger" onClick={() => navigate('settings', '班级设置')} aria-label="班级设置"><span className="avatar">{session.user.nickname.slice(-2)}</span><span>{session.user.nickname}</span></button><button className="menu-trigger icon-btn" aria-label={drawerOpen ? '关闭导航' : '打开导航'} aria-expanded={drawerOpen} onClick={() => setDrawerOpen(!drawerOpen)}>{drawerOpen ? <X size={23} /> : <Menu size={23} />}</button></div></div></header>
+    {drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)}><nav className="mobile-drawer" aria-label="手机导航" onClick={e => e.stopPropagation()}><div className="drawer-heading"><span>{session.classroom.name}</span><button className="icon-btn" onClick={() => setDrawerOpen(false)} aria-label="关闭导航"><X size={20} /></button></div>{primaryNav.map(group => <div className="drawer-group" key={group.name}><button className="drawer-primary" onClick={() => navigate(group.id, group.name)}>{group.name}<ChevronRight size={17} /></button>{'items' in group && <div className="drawer-items">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.role === 'admin' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav></div>}
+    <div className="main-shell">{page !== 'ai' && <div className="breadcrumb"><button onClick={() => navigate('ai', '首页')}>首页</button><ChevronRight size={15} /><span>{section}</span></div>}
       {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="关闭错误"><X size={16} /></button></div>}
       <main className="main-content">
         {page === 'ai' && <ChatView session={session} tasks={tasks} loading={loading} onTask={prepareTask} onNotice={showNotice} onPage={setPage} onAction={setPending} onDraft={value => { setTransferredDraft(value); setPage('admin') }} onRefresh={refresh} />}
@@ -116,10 +127,10 @@ export default function App() {
         {page === 'notices' && <NoticesPage notices={notices} loading={loading} onNotice={setSelectedNotice} />}
         {page === 'admin' && session.user.role === 'admin' && <AdminPage initialDraft={transferredDraft} onConsumeDraft={() => setTransferredDraft(null)} tasks={tasks} notices={notices} onRefresh={refresh} onNotice={setSelectedNotice} onError={setError} />}
         {page === 'settings' && <SettingsPage session={session} tasks={tasks} completed={completed} onLogout={logout} onSession={setSession} onNotify={setToast} onError={setError} onAdmin={() => setPage('admin')} />}
+        {page === 'placeholder' && <div className="standard-page placeholder-page"><PageHeading eyebrow="班枢" title={section} text="这个栏目即将开放。" /><div className="panel"><p>班级内容正在整理中。</p><Button variant="outline" onClick={() => navigate('ai', '首页')}>返回首页<ArrowRight size={16} /></Button></div></div>}
       </main>
       <footer className="page-footer"><ShieldCheck size={13} />回答有来源，操作由你确认<span>与你一起，把班级事务变简单</span></footer>
     </div>
-    <nav className="mobile-nav" aria-label="手机导航">{nav.filter(n => n.id !== 'admin').map(({ id, name, icon: Icon }) => <button className={page === id ? 'active' : ''} key={id} onClick={() => setPage(id)}><Icon size={20} /><span>{id === 'settings' ? '我的' : name}</span></button>)}</nav>
     {toast && <div className="toast" role="status"><CheckCheck size={18} />{toast}</div>}
 
     {selectedNotice && <Modal title="通知详情" onClose={() => setSelectedNotice(null)}><div className="notice-modal"><span className="eyebrow">班级通知 / 原始来源</span><h1>{selectedNotice.title}</h1><p className="muted">{selectedNotice.authorName} · {formatDate(selectedNotice.createdAt)}{selectedNotice.version > 1 && ' · 已更新'}</p><div className="notice-content">{selectedNotice.content}</div><div className="source-note"><ShieldCheck size={16} />AI 回答以这条通知为依据。时间均为北京时间。</div></div></Modal>}
@@ -127,7 +138,7 @@ export default function App() {
   </div>
 }
 
-function Brand({ compact = false }: { compact?: boolean }) { return <div className="brand"><div className="brand-mark"><Sparkles size={23} strokeWidth={1.8} /></div>{!compact && <div><strong>{BRAND.name}</strong><small>CLASSROOM, CONNECTED.</small></div>}</div> }
+function Brand() { return <div className="brand"><div className="brand-mark"><Sparkles size={23} strokeWidth={1.8} /></div><strong>{BRAND.name}</strong></div> }
 function Welcome({ onSignIn }: { onSignIn: (s: Session) => void }) {
   const [mode, setMode] = useState<'join' | 'create'>('join')
   const [identifierKind, setIdentifierKind] = useState<'nickname' | 'studentNo'>('nickname')
@@ -169,10 +180,11 @@ function ChatView({ session, tasks, loading, onTask, onNotice, onPage, onAction,
       await onRefresh()
     } catch (e) { setError((e as Error).message); setInput(text) } finally { setBusy(false); setStatus('') }
   }
-  return <div className="ai-layout"><section className="chat-column"><div className="greeting-row"><div><span className="eyebrow">YOUR CLASS, A LITTLE SIMPLER</span><h1>你好，{session.user.nickname}<span className="wave">☀</span></h1><p>今天也一起，把班级的事安排好。</p></div><div className="greeting-decoration"><Leaf size={40} strokeWidth={1.1} /><span /></div></div><button className="mobile-task-summary" onClick={() => onPage('tasks')}><ListTodo size={17} />还有 <strong>{pendingTasks.length}</strong> 项待办，今天也有条不紊<ChevronRight size={16} /></button><div className="conversation-panel"><div className="conversation-heading"><div className="ai-avatar"><Sparkles size={21} /></div><div><strong>你的班级 AI 助手</strong><span><span className="green-dot" />实时查询班级数据</span></div><span className="beta-pill">AI</span></div><div className="conversation-body">
+  const completion = tasks.length ? Math.round((tasks.length - pendingTasks.length) / tasks.length * 100) : 0
+  return <div className="ai-layout"><section className="chat-column"><div className="greeting-row"><div><span className="eyebrow">今天的班级空间</span><h1>你好，{session.user.nickname}<span className="wave">☀</span></h1><p>今天也一起，把班级的事安排好。</p></div><div className="greeting-decoration"><Leaf size={40} strokeWidth={1.1} /><span /></div></div><button className="mobile-task-summary" onClick={() => onPage('tasks')}><ListTodo size={17} />还有 <strong>{pendingTasks.length}</strong> 项待办，今天也有条不紊<ChevronRight size={16} /></button><div className="conversation-panel"><div className="conversation-heading"><div className="ai-avatar"><Sparkles size={21} /></div><div><strong>你的班级 AI 助手</strong><span><span className="green-dot" />实时查询班级数据</span></div><span className="beta-pill">AI</span></div><div className="conversation-body">
       {messages.length === 0 ? <div className="chat-welcome"><div className="orb"><Sparkles size={34} strokeWidth={1.4} /><span className="orb-star">✧</span></div><h2>班务有点多？<br /><span>从问我一句开始。</span></h2><p>找通知、查待办、跟进完成情况。<br />我帮你找到答案，也把下一步准备好。</p><div className="prompt-grid">{[{ icon: ListTodo, title: '看看我的待办', text: '我今天需要做什么？', color: 'mint' }, { icon: Search, title: '找一条班级通知', text: '帮我找运动会报名要求', color: 'blue' }, { icon: CalendarDays, title: '安排这周的事', text: '这周有什么要交？', color: 'peach' }, { icon: CheckCheck, title: session.user.role === 'admin' ? '了解班级进度' : '更新任务状态', text: session.user.role === 'admin' ? '运动会报名还有谁没完成？' : '我已经完成运动会报名', color: 'purple' }].map(p => <button key={p.title} className="prompt-card" onClick={() => send(p.text)}><span className={`prompt-icon ${p.color}`}><p.icon size={18} /></span><strong>{p.title}</strong><small>{p.text}</small><ArrowUp size={15} /></button>)}</div></div> : <div className="message-list">{messages.map(m => <div key={m.id} className={`message ${m.role}`}><span className={m.role === 'assistant' ? 'mini-ai' : 'avatar'}>{m.role === 'assistant' ? <Sparkles size={17} /> : session.user.nickname.slice(-1)}</span><div className="message-main"><span className="message-name">{m.role === 'assistant' ? BRAND.name : session.user.nickname}</span><div className="message-content">{m.content}</div>{m.cards?.map((card, i) => <ResultCard key={i} card={card} tasks={tasks} onTask={onTask} onNotice={onNotice} onAction={onAction} onPage={onPage} onDraft={onDraft} />)}</div></div>)}<div ref={end} /></div>}
       {busy && <div className="thinking"><LoaderCircle size={15} className="spin" />{status}</div>}{error && <p className="chat-error" role="alert">{error} 输入已保留，可重新发送。</p>}</div><form className="composer" onSubmit={e => { e.preventDefault(); void send(input) }}><textarea aria-label="向班级 AI 提问" placeholder="问问班级的事，或者粘贴一条通知…" value={input} maxLength={12000} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(input) } }} rows={2} /><div className="composer-bottom">{session.user.role === 'admin' && <label className="source-date">原通知日期<input type="date" aria-label="原通知日期" value={sourceDate} onChange={e => setSourceDate(e.target.value)} /></label>}<span><ShieldCheck size={14} />重要操作会先请你确认</span><span className="enter-hint">Enter 发送 · Shift + Enter 换行</span><button className="send-button" type="submit" disabled={busy || !input.trim()} aria-label="发送消息">{busy ? <LoaderCircle size={18} className="spin" /> : <ArrowUp size={20} />}</button></div></form><div className="chat-disclaimer">AI 可能遗漏细节，请以原始通知和确认页面为准。</div></div></section>
-    <aside className="right-panel"><div className="today-card"><div className="section-top"><h3><span className="green-dot" />我的待办</h3><button className="text-link" onClick={() => onPage('tasks')}>查看全部<ArrowRight size={14} /></button></div><div className="task-count"><strong>{pendingTasks.length.toString().padStart(2, '0')}</strong><div>件事等你完成<br /><small>{tasks.filter(t => t.status === 'completed').length} 件已经完成，继续加油</small></div></div><div className="mini-task-list">{loading ? <Skeleton /> : pendingTasks.slice(0, 3).map(t => <div className="mini-task" key={t.id}><button className="check-circle" aria-label={`完成${t.title}`} onClick={() => onTask(t)} /><div><button className="plain-title" onClick={() => onNotice(t.noticeId)}>{t.title}</button><span className={overdue(t) ? 'due overdue' : 'due'}><Clock3 size={12} />{overdue(t) ? '已逾期 · ' : ''}{formatDate(t.dueAt)}</span></div></div>)}{!loading && pendingTasks.length === 0 && <p className="muted all-done">都完成啦，享受一点轻松时刻 🌿</p>}</div><div className="progress-label"><span>我的完成进度</span><strong>{tasks.length ? Math.round((tasks.length - pendingTasks.length) / tasks.length * 100) : 0}%</strong></div><div className="progress-track"><span style={{ width: `${tasks.length ? (tasks.length - pendingTasks.length) / tasks.length * 100 : 0}%` }} /></div></div><div className="quick-card"><h3>班级快捷入口</h3><button onClick={() => onPage('notices')}><span className="quick-icon"><FileText size={18} /></span><span><strong>全部通知</strong><small>每一条消息，都找得到</small></span><ChevronRight size={16} /></button><button onClick={() => onPage(session.user.role === 'admin' ? 'admin' : 'settings')}><span className="quick-icon peach"><Users size={18} /></span><span><strong>{session.user.role === 'admin' ? '发布与统计' : '我的班级'}</strong><small>{session.user.role === 'admin' ? '把通知整理成下一步' : session.classroom.name}</small></span><ChevronRight size={16} /></button></div><div className="tip-card"><span className="tip-spark">✧</span><span className="eyebrow">A LITTLE TIP</span><h3>问得自然一点，<br />也没关系。</h3><p>试试说“这周有什么要交？”<br />不需要记住复杂的菜单，<br />从你的问题开始就好。</p><span className="tip-leaf"><Leaf size={58} strokeWidth={1} /></span></div><div className="right-bottom"><ShieldCheck size={15} /><span>班级数据，仅对授权成员可见</span></div></aside></div>
+    <aside className="right-panel"><div className="today-card"><div className="section-top"><h3><span className="green-dot" />我的待办</h3><button className="text-link" onClick={() => onPage('tasks')}>查看全部<ArrowRight size={14} /></button></div><div className="task-overview"><div className="task-count"><strong>{pendingTasks.length.toString().padStart(2, '0')}</strong><div>件事等你完成<br /><small>{tasks.filter(t => t.status === 'completed').length} 件已经完成，继续加油</small></div></div><ProgressRing value={completion} /></div><div className="mini-task-list">{loading ? <Skeleton /> : pendingTasks.slice(0, 3).map(t => <div className="mini-task" key={t.id}><button className="check-circle" aria-label={`完成${t.title}`} onClick={() => onTask(t)} /><div><button className="plain-title" onClick={() => onNotice(t.noticeId)}>{t.title}</button><span className={overdue(t) ? 'due overdue' : 'due'}><Clock3 size={12} />{overdue(t) ? '已逾期 · ' : ''}{formatDate(t.dueAt)}</span></div></div>)}{!loading && pendingTasks.length === 0 && <p className="muted all-done">都完成啦，享受一点轻松时刻 🌿</p>}</div><div className="progress-label"><span>我的完成进度</span><strong>{tasks.length ? completion : 0}%</strong></div><div className="progress-track"><span style={{ width: `${tasks.length ? (tasks.length - pendingTasks.length) / tasks.length * 100 : 0}%` }} /></div></div><div className="quick-card"><h3>班级快捷入口</h3><button onClick={() => onPage('notices')}><span className="quick-icon"><FileText size={18} /></span><span><strong>全部通知</strong><small>每一条消息，都找得到</small></span><ChevronRight size={16} /></button><button onClick={() => onPage(session.user.role === 'admin' ? 'admin' : 'settings')}><span className="quick-icon peach"><Users size={18} /></span><span><strong>{session.user.role === 'admin' ? '发布与统计' : '我的班级'}</strong><small>{session.user.role === 'admin' ? '把通知整理成下一步' : session.classroom.name}</small></span><ChevronRight size={16} /></button></div><div className="tip-card"><span className="tip-spark">✧</span><span className="eyebrow">A LITTLE TIP</span><h3>问得自然一点，<br />也没关系。</h3><p>试试说“这周有什么要交？”<br />不需要记住复杂的菜单，<br />从你的问题开始就好。</p><span className="tip-leaf"><Leaf size={58} strokeWidth={1} /></span></div><div className="right-bottom"><ShieldCheck size={15} /><span>班级数据，仅对授权成员可见</span></div></aside></div>
 }
 
 function ResultCard({ card, tasks, onTask, onNotice, onAction, onPage, onDraft }: { card: ChatCard; tasks: Task[]; onTask: (t: Task) => void; onNotice: (id: string) => void; onAction: (a: Action) => void; onPage: (p: Page) => void; onDraft: (draft: Draft) => void }) {

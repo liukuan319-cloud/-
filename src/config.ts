@@ -1,1 +1,1 @@
-export const BRAND = { name: '班级 AI 助手', shortName: '班级 AI', tagline: '少一点琐碎，多一点从容。' }
+export const BRAND = { name: '班枢', shortName: '班枢', tagline: '少一点琐碎，多一点从容。' }
