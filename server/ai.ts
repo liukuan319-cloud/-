@@ -85,14 +85,21 @@ const banshuToolDefinitions = [
   tool('get_timetable', '根据星期几查询当天课程表。', { day: { type: 'string', description: '星期几，如周一' } }, ['day']),
   tool('get_duty', '查询某天值日安排。', { day: { type: 'string', description: '星期几，如周一' } }, ['day']),
   tool('generate_duty_plan', '根据成员顺序生成未来最多 14 天的值日建议，不会保存。', { days: { type: 'number' }, startDay: { type: 'string' } }),
-  tool('get_notices', '查询传入的班级通知。', {}, []),
+  tool('get_class_info', '查询班级名称、班干部姓名和当前班级成员姓名。', {}, []),
+  tool('search_members', '按关键词查找本班在册成员姓名和身份，不返回学号。', { query: { type: 'string' } }, ['query']),
+  tool('get_notices', '查询最近七天已发布通知，可按标题或原文关键词筛选。', { query: { type: 'string' } }),
+  tool('get_my_tasks', '查询当前用户自己的任务、完成状态和截止时间，包含已逾期任务。', { query: { type: 'string' }, status: { type: 'string', enum: ['all', 'pending', 'completed'] } }),
+  tool('get_task_progress', '仅班干部可查询本班任务完成统计。', { query: { type: 'string' } }),
 ];
 const banshuDataSchema = z.object({
   timetable: z.array(z.object({ day: z.string(), time: z.string(), course: z.string(), room: z.string() }).passthrough()).max(500).default([]),
   duty: z.array(z.object({ day: z.string(), member: z.string() }).passthrough()).max(500).default([]),
-  members: z.array(z.object({ name: z.string() }).passthrough()).max(500).default([]),
+  members: z.array(z.object({ name: z.string(), role: z.string().optional() }).passthrough()).max(500).default([]),
   notices: z.array(z.object({ title: z.string(), content: z.string(), date: z.string() }).passthrough()).max(500).default([]),
-}).default({ timetable: [], duty: [], members: [], notices: [] });
+  className: z.string().default(''), role: z.enum(['admin','student']).default('student'),
+  ownTasks: z.array(z.object({ title: z.string(), description: z.string().default(''), dueAt: z.string().nullable().optional(), status: z.string() }).passthrough()).max(500).default([]),
+  adminProgress: z.array(z.object({ id: z.string().optional(), title: z.string(), total: z.number(), completed: z.number() }).passthrough()).max(500).default([]),
+}).default({ timetable: [], duty: [], members: [], notices: [], className: '', role: 'student', ownTasks: [], adminProgress: [] });
 const runBanshuTool = (name: string, rawArgs: unknown, data: z.infer<typeof banshuDataSchema>) => {
   const args = z.record(z.string(), z.unknown()).parse(rawArgs || {});
   if (name === 'get_timetable') {
@@ -114,7 +121,37 @@ const runBanshuTool = (name: string, rawArgs: unknown, data: z.infer<typeof bans
     const start = typeof args.startDay === 'string' && args.startDay ? `，起始日为${args.startDay}` : '';
     return `已生成${days}天值日建议${start}：\n${Array.from({ length: days }, (_, i) => `第${i + 1}天：${data.members[i % data.members.length].name}`).join('\n')}`;
   }
-  if (name === 'get_notices') return data.notices.length ? data.notices.map(n => `${n.title}（${n.date}）：${n.content}`).join('\n') : '暂无通知';
+  if (name === 'get_class_info') {
+    const admins = data.members.filter(member => member.role === 'admin').map(member => member.name);
+    return JSON.stringify({ className: data.className || '班级名称未设置', administrators: admins, members: data.members.map(member => member.name) });
+  }
+  if (name === 'search_members') {
+    const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : '';
+    const matches = data.members.filter(member => !query || member.name.toLowerCase().includes(query));
+    return matches.length ? matches.map(member => `${member.name}${member.role === 'admin' ? '（班干部）' : '（成员）'}`).join('、') : '没有找到匹配的在册成员';
+  }
+  if (name === 'get_notices') {
+    const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : '';
+    const matches = data.notices.filter(notice => !query || (notice.title + notice.content).toLowerCase().includes(query));
+    return matches.length ? matches.map(n => `${n.title}（${n.date}）：${n.content}`).join('\n') : '暂无符合条件的最近七天通知';
+  }
+  if (name === 'get_my_tasks') {
+    const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : '';
+    const status = args.status === 'pending' || args.status === 'completed' ? args.status : 'all';
+    const matches = data.ownTasks.filter(task => (status === 'all' || task.status === status) && (!query || (task.title + task.description).toLowerCase().includes(query)));
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    return matches.length ? matches.map(task => {
+      const dueDate = task.dueAt ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(task.dueAt)) : '截止时间未设置';
+      const overdue = task.status === 'pending' && task.dueAt && dueDate < today;
+      return `${task.title}（${task.status === 'completed' ? '已完成' : overdue ? '已逾期未完成' : '待完成'}，截止${dueDate}）${task.description ? `：${task.description}` : ''}`;
+    }).join('\n') : '没有符合条件的本人任务';
+  }
+  if (name === 'get_task_progress') {
+    if (data.role !== 'admin') return '仅班干部可以查询任务进度';
+    const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : '';
+    const matches = data.adminProgress.filter(task => !query || task.title.toLowerCase().includes(query));
+    return matches.length ? matches.map(task => `${task.title}：${task.completed}/${task.total} 人已自报完成`).join('\n') : '没有找到匹配的任务进度';
+  }
   throw new Error('unsupported tool');
 };
 
@@ -122,18 +159,22 @@ const runBanshuTool = (name: string, rawArgs: unknown, data: z.infer<typeof bans
 export async function banshuChat(env: Env, message: string, history: unknown, inputData: unknown, signal?: AbortSignal): Promise<string> {
   const apiKey = env.API_KEY || env.AI_API_KEY;
   if (!apiKey) throw new HTTPException(503, { message: '服务端尚未配置 API_KEY。' });
-  const data = banshuDataSchema.parse(inputData);
+  const parsedData = banshuDataSchema.parse(inputData);
+  const noticeCutoff = new Date(beijingDate() + 'T00:00:00Z'); noticeCutoff.setUTCDate(noticeCutoff.getUTCDate() - 6);
+  const data = { ...parsedData, notices: parsedData.notices.filter(notice => notice.date >= noticeCutoff.toISOString().slice(0, 10)) };
   const prior = z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(12000) })).max(12).parse(history || []);
   const base = (env.API_BASE || env.AI_BASE_URL || 'https://api.deepseek.com').replace(/\/$/, '');
   const model = env.MODEL || env.AI_MODEL || 'deepseek-chat';
   const messages: Array<Record<string, unknown>> = [
-    { role: 'system', content: '你是班枢，一个班级事务 AI 助手。只能依据班级数据回答，回答简短清晰。需要课表、值日或通知数据时必须调用工具，不得编造。自动排班只返回建议，不代表已经保存。' },
+    { role: 'system', content: '你是班枢，一个班级事务 AI 助手。只能依据当前工具返回的班级数据回答，回答简短清晰。涉及班级名称、班干部或成员姓名、课表、值日、通知、本人任务或任务进度时必须调用对应工具；没有结果时明确说明没有数据，不得编造。成员查询不得询问或披露学号。自动排班只返回建议，不代表已经保存。所有工具只读。' },
     ...prior,
     { role: 'user', content: message },
   ];
+  let lastDutyResult = '';
   for (let round = 0; round < 4; round++) {
     let response: Response;
-    try { response = await fetch(`${base}/chat/completions`, { method: 'POST', signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, tools: banshuToolDefinitions, tool_choice: 'auto', temperature: 0.2 }) }); }
+    const allowedTools = data.role === 'admin' ? banshuToolDefinitions : banshuToolDefinitions.filter(item => item.function.name !== 'get_task_progress');
+    try { response = await fetch(`${base}/chat/completions`, { method: 'POST', signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, tools: allowedTools, tool_choice: 'auto', temperature: 0.2 }) }); }
     catch { throw new HTTPException(signal?.aborted ? 504 : 502, { message: signal?.aborted ? '模型请求超时，请重试。' : '暂时无法连接模型服务，请稍后重试。' }); }
     if (!response.ok) throw new HTTPException(502, { message: '模型服务暂时不可用，请稍后重试。' });
     let parsed: any; try { parsed = await response.json(); } catch { throw new HTTPException(502, { message: '模型返回格式无法识别，请重试。' }); }
@@ -141,11 +182,7 @@ export async function banshuChat(env: Env, message: string, history: unknown, in
     if (!modelMessage) throw new HTTPException(502, { message: '模型返回异常，请重试。' });
     const calls = Array.isArray(modelMessage.tool_calls) ? modelMessage.tool_calls.slice(0, 6) : [];
     if (!calls.length) {
-      if (round === 0 && /值日/.test(message)) {
-        const dayMatch = message.match(/周[一二三四五六日天]/);
-        const day = dayMatch?.[0] || (message.includes('明天') ? '明天' : '');
-        if (day) return runBanshuTool('get_duty', { day }, data);
-      }
+      if (/值日/.test(message) && lastDutyResult && /没有值日安排/.test(lastDutyResult)) return message.includes('明天') ? `明天${lastDutyResult}` : lastDutyResult;
       return typeof modelMessage.content === 'string' && modelMessage.content.trim() ? modelMessage.content.trim() : '抱歉，我没有理解你的意思。';
     }
     messages.push({ role: 'assistant', content: modelMessage.content ?? null, tool_calls: calls });
@@ -154,7 +191,7 @@ export async function banshuChat(env: Env, message: string, history: unknown, in
       let args: unknown = {};
       try { args = JSON.parse(call?.function?.arguments || '{}'); } catch { args = {}; }
       let result = '工具参数不符合要求。';
-      try { result = runBanshuTool(name, args, data); } catch { /* Keep malformed model calls inside the tool loop. */ }
+      try { result = runBanshuTool(name, args, data); if (name === 'get_duty') lastDutyResult = result; } catch { /* Keep malformed model calls inside the tool loop. */ }
       messages.push({ role: 'tool', tool_call_id: String(call?.id || ''), content: result });
     }
   }

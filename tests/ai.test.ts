@@ -16,7 +16,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const result = statements.map(s => s.execute()); this.db.exec('COMMIT'); return result } catch (error) { this.db.exec('ROLLBACK'); throw error } }
 }
@@ -86,13 +86,41 @@ describe('native Banshu tool contract', () => {
     expect(outputs).toEqual(['08:00-09:40 高数（教3102）', '班会通知（2026-10-10）：周五下午开会', '已生成2天值日建议，起始日为周一：\n第1天：张三\n第2天：张三'])
   })
 
+  it('exposes only scoped class, name, recent notice, own task and admin progress lookups', async () => {
+    const mock = mockProvider([
+      { content: null, tool_calls: [
+        { id: 'class', type: 'function', function: { name: 'get_class_info', arguments: '{}' } },
+        { id: 'member', type: 'function', function: { name: 'search_members', arguments: '{"query":"张"}' } },
+        { id: 'notice', type: 'function', function: { name: 'get_notices', arguments: '{"query":"报名"}' } },
+        { id: 'tasks', type: 'function', function: { name: 'get_my_tasks', arguments: '{"status":"pending"}' } },
+        { id: 'progress', type: 'function', function: { name: 'get_task_progress', arguments: '{"query":"材料"}' } },
+      ] },
+      { content: '已查询。' },
+    ])
+    await banshuChat(env, '查班级资料', [], { className: '七年级一班', role: 'admin', timetable: [], duty: [], members: [{ name: '班主任', role: 'admin' }, { name: '张三', role: 'student' }], notices: [{ title: '报名通知', content: '请提交报名表', date: '2026-10-08' }, { title: '旧通知', content: '报名', date: '2026-09-01' }], ownTasks: [{ title: '提交材料', description: '', dueAt: '2020-01-01T00:00:00+08:00', status: 'pending' }], adminProgress: [{ title: '材料收集', total: 20, completed: 8 }] })
+    const second = JSON.parse(String(mock.mock.calls[1][1].body))
+    const outputs = second.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content)
+    expect(outputs[0]).toContain('七年级一班')
+    expect(outputs[0]).toContain('班主任')
+    expect(outputs[1]).toContain('张三')
+    expect(outputs[2]).toContain('报名通知')
+    expect(outputs[2]).not.toContain('旧通知')
+    expect(outputs[3]).toContain('已逾期未完成')
+    expect(outputs[4]).toContain('8/20')
+
+    const studentProvider = vi.fn(async (_url: string, _init: any) => Response.json({ choices: [{ message: { content: '没有任务进度权限。' } }] }))
+    vi.stubGlobal('fetch', studentProvider)
+    await banshuChat(env, '查任务进度', [], { role: 'student' })
+    const studentBody = JSON.parse(String(studentProvider.mock.calls[0][1].body))
+    expect(studentBody.tools.map((item: any) => item.function.name)).not.toContain('get_task_progress')
+  })
+
   it('rejects invalid history and never includes a secret in provider failures', async () => {
     await expect(banshuChat(env, '你好', [{ role: 'system', content: '越权' }], {})).rejects.toHaveProperty('issues')
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'provider-secret' }, { status: 401 })))
     await expect(banshuChat(env, '你好', [], {})).rejects.toSatisfy((e: any) => e.status === 502 && !e.message.includes('provider-secret'))
   })
 })
-
 describe('AI tool boundary and demo rules', () => {
   it('keeps the evaluation corpus as a 20-case reference without inventing model accuracy', () => {
     const corpus = JSON.parse(readFileSync(new URL('../docs/notification-cases.json', import.meta.url), 'utf8'))

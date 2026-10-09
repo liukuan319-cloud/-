@@ -19,7 +19,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const results = statements.map(s => s.execute()); this.db.exec('COMMIT'); return results } catch (e) { this.db.exec('ROLLBACK'); throw e } }
 }
@@ -54,11 +54,53 @@ describe('same-origin Banshu API contract', () => {
       : { content: '明天周五由张三值日。' } }] })))
     const response = await request('/chat', 'POST', { message: '明天谁值日？', history: [], data: { timetable: [], duty: [{ day: '周五', member: '张三' }], members: [], notices: [] } }, owner.cookie)
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ reply: '明天周五由张三值日。' })
+    expect(await response.json()).toEqual({ reply: '明天周五没有值日安排' })
     expect(db.db.prepare('SELECT count(*) AS count FROM actions').get()!.count).toBe(0)
     expect(db.db.prepare('SELECT count(*) AS count FROM messages').get()!.count).toBe(0)
     expect((await request('/chat', 'POST', { message: '明天谁值日？', history: [], data: {} })).status).toBe(401)
   })
+
+  it('feeds database schedule to SSE tools without sending student numbers to the provider', async () => {
+    env.API_KEY = 'server-only-test-key'
+    const owner = await signup()
+    await request('/class/members/import', 'POST', { text: '同学甲,NO-LEAK-773' }, owner.cookie)
+    const saved = await request('/class/schedule', 'PUT', { timetable: [{ day: '周一', time: '08:00-09:40', course: '数据库课程', room: '教3102' }], duty: [] }, owner.cookie)
+    expect(saved.status).toBe(200)
+    let call = 0
+    const provider = vi.fn(async (_url: string, init: any) => {
+      const body = JSON.parse(init.body)
+      expect(JSON.stringify(body)).not.toContain('NO-LEAK-773')
+      return Response.json({ choices: [{ message: call++ === 0
+        ? { content: null, tool_calls: [{ id: 'schedule', type: 'function', function: { name: 'get_timetable', arguments: '{"day":"周一"}' } }] }
+        : { content: '周一有数据库课程。' } }] })
+    })
+    vi.stubGlobal('fetch', provider)
+    const response = await request('/chat', 'POST', { message: '周一有什么课？' }, owner.cookie)
+    const stream = await response.text()
+    expect(response.headers.get('content-type')).toContain('text/event-stream')
+    expect(stream).toContain('周一有数据库课程')
+    const providerBodies = provider.mock.calls.map(call => JSON.parse(String(call[1].body)))
+    expect(JSON.stringify(providerBodies)).toContain('08:00-09:40 数据库课程（教3102）')
+  })
+})
+describe('class timetable and duty data',()=>{
+ it('requires an admin to replace validated schedule data and isolates classes',async()=>{
+  const owner=await signup(), student=await join(owner), other=await signup('另一个班')
+  const body={timetable:[{day:'周一',time:'08:00-09:40',course:'高等数学',room:'教3102'}],duty:[{day:'周一',name:'同学甲'}]}
+  expect((await request('/class/schedule','PUT',body,student.cookie)).status).toBe(403)
+  expect((await request('/class/schedule','PUT',body,owner.cookie)).status).toBe(200)
+  expect(await (await request('/class/schedule','GET',undefined,owner.cookie)).json()).toMatchObject(body)
+  expect(await (await request('/class/schedule','GET',undefined,other.cookie)).json()).toMatchObject({timetable:[],duty:[]})
+  expect((await request('/class/schedule','PUT',{...body,timetable:[{day:'周八',time:'xx',course:'',room:''}]},owner.cookie)).status).toBe(400)
+  expect((await request('/class/schedule','PUT',{...body,duty:[{day:'周一',name:'不存在'}]},owner.cookie)).status).toBe(400)
+ })
+ it('imports weekday schedule and duty CSV with line errors and never returns student numbers',async()=>{
+  const owner=await signup();await request('/class/members/import','POST',{text:'张三,STUDENT-SECRET\n李四,002'},owner.cookie)
+  const response=await request('/class/schedule/import','POST',{timetable:'day,time,course,room\n周一,08:00-09:40,高数,教3102\n周八,xx,坏行,',duty:'day,name\n周一,张三\n周二,查无此人'},owner.cookie)
+  expect(response.status).toBe(200);expect(await response.json()).toMatchObject({timetable:{imported:1,failed:1},duty:{imported:1,failed:1}})
+  const saved=await (await request('/class/schedule','GET',undefined,owner.cookie)).json() as any
+  expect(saved.timetable).toHaveLength(1);expect(saved.duty).toMatchObject([{day:'周一',member:'张三'}]);expect(JSON.stringify(saved)).not.toContain('STUDENT-SECRET')
+ })
 })
 async function prepare(owner: any, value = draft()) { const response = await request('/drafts', 'POST', value, owner.cookie); expect(response.status).toBe(200); return (await response.json() as any).action }
 async function publish(owner: any, value = draft()) { const action = await prepare(owner, value); const response = await request(`/actions/${action.id}/confirm`, 'POST', {}, owner.cookie); expect(response.status).toBe(200); return (await response.json() as any).result }
