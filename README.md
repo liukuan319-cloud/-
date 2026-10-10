@@ -31,7 +31,7 @@ Copy-Item .dev.vars.example .dev.vars
 
 ## 账号和班级
 
-- 辅导员通过“创建班级”建立独立空间，使用辅导员账号和密码登录。
+- 团队设置 Worker Secret `CREATE_CLASS_KEY` 后，辅导员通过首页输入团队创建密钥建立独立空间，再用辅导员账号和密码登录。没有 Secret 时创建接口会拒绝请求；不要把密钥提交到仓库或前端。
 - 班干部和学生由本班管理员导入含学号的名单；首次使用时输入学号、该班邀请码并设置密码。之后用学号和密码登录。名单外账号不能激活。
 - 辅导员可任免班干部、重置成员密码、重置邀请码及清空本班数据；班干部只能管理学生和业务内容。清空前应导出 D1 备份。
 - 已有班级的初始凭证由一次性脚本写入 `.local/initial-faculty-credentials.txt` 和 `.local/legacy-faculty-credentials.txt`，这两个文件不会被 Git 上传。首次登录后请修改密码。
@@ -51,6 +51,7 @@ pnpm worker:dev
 ```powershell
 pnpm exec wrangler d1 migrations apply class-ai --remote
 pnpm exec wrangler secret put API_KEY
+pnpm exec wrangler secret put CREATE_CLASS_KEY
 pnpm build
 pnpm exec wrangler deploy
 ```

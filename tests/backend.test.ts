@@ -26,14 +26,14 @@ class SqliteD1 {
 }
 let db: SqliteD1
 let env: Env
-beforeEach(() => { db = new SqliteD1(); env = { DB: db as unknown as D1Database } })
+beforeEach(() => { db = new SqliteD1(); env = { DB: db as unknown as D1Database, CREATE_CLASS_KEY: 'team-test-key' } })
 afterEach(() => { vi.unstubAllGlobals(); db.db.close() })
 
 async function request(path: string, method = 'GET', body?: unknown, cookie?: string, headers: Record<string, string> = {}) {
   return app.request(`https://class.test/api${path}`, { method, headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}), ...headers }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }, env)
 }
 async function signup(name = '测试班级', nickname = '班干部') {
-  const response = await request('/classes', 'POST', { name, nickname, username: `faculty_${crypto.randomUUID().slice(0, 8)}`, password: 'Banshu2026' })
+  const response = await request('/classes', 'POST', { name, nickname, username: `faculty_${crypto.randomUUID().slice(0, 8)}`, password: 'Banshu2026', createKey: 'team-test-key' })
   expect(response.status).toBe(200)
   return { ...(await response.json()) as any, cookie: response.headers.get('set-cookie')!.split(';')[0], response }
 }
@@ -48,6 +48,26 @@ async function join(owner: any, nickname = '同学甲') {
   return { ...(await response.json()) as any, cookie: response.headers.get('set-cookie')!.split(';')[0] }
 }
 const draft = (overrides: Record<string, unknown> = {}) => ({ title: '运动会报名', content: '请于 2026 年 10 月 12 日 18:00 前提交报名表。', sourceDate: '2026-10-08', tasks: [{ title: '提交报名表', description: '检查报名项目后交给班干部。', dueAt: '2026-10-12T18:00:00+08:00', audience: 'all', memberIds: [] }], ...overrides })
+
+describe('class creation access', () => {
+  const body = { name: '测试班级', nickname: '辅导员', username: 'faculty_test', password: 'Banshu2026' }
+  it('requires the team secret before creating any records', async () => {
+    const missing = await request('/classes', 'POST', body)
+    expect(missing.status).toBe(400)
+    expect(await missing.json()).toEqual({ error: '请输入创建密钥' })
+    const wrong = await request('/classes', 'POST', { ...body, createKey: 'wrong' })
+    expect(wrong.status).toBe(403)
+    expect(await wrong.json()).toEqual({ error: '创建密钥不正确' })
+    expect(db.db.prepare('SELECT count(*) AS n FROM classes').get()!.n).toBe(0)
+    expect((await request('/classes', 'POST', { ...body, createKey: 'team-test-key' })).status).toBe(200)
+  })
+  it('rejects creation when the Worker secret is unset and disables demo creation', async () => {
+    delete env.CREATE_CLASS_KEY
+    expect((await request('/classes', 'POST', { ...body, createKey: 'team-test-key' })).status).toBe(503)
+    expect((await request('/demo', 'POST', { role: 'admin' })).status).toBe(403)
+    expect(db.db.prepare('SELECT count(*) AS n FROM classes').get()!.n).toBe(0)
+  })
+})
 
 describe('same-origin Banshu API contract', () => {
   it('returns reply JSON after a model tool round without modifying class data', async () => {
@@ -173,7 +193,7 @@ describe('identity and authentication', () => {
   it('revokes the current session on logout', async () => { const owner = await signup(); expect((await request('/session', 'DELETE', undefined, owner.cookie)).status).toBe(200); expect((await request('/session', 'GET', undefined, owner.cookie)).status).toBe(401) })
   it('rotates invitation codes without removing existing members', async () => { const owner = await signup(); const student = await join(owner); const response = await request('/invite/rotate', 'POST', {}, owner.cookie); expect(response.status).toBe(200); expect((await request('/activate', 'POST', { inviteCode: owner.classroom.inviteCode, studentNo: '999',password:'Student2026',confirmPassword:'Student2026' })).status).toBe(403); expect((await request('/session', 'GET', undefined, student.cookie)).status).toBe(200) })
   it('blocks cross-origin mutations and invalid JSON', async () => { expect((await request('/classes', 'POST', { name: 'X', nickname: 'Y' }, undefined, { Origin: 'https://evil.example' })).status).toBe(403); const response = await app.request('https://class.test/api/classes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bad' }, env); expect(response.status).toBe(400) })
-  it('keeps each demo class separate from other demo and real classes', async () => { const one = await (await request('/demo', 'POST', { role: 'admin' })).json() as any; const two = await (await request('/demo', 'POST', { role: 'student' })).json() as any; const real = await signup(); expect(one.mode).toBe('demo'); expect(one.classroom.id).not.toBe(two.classroom.id); expect(one.classroom.id).not.toBe(real.classroom.id) })
+  it('never creates a class through the retired demo endpoint', async () => { await signup(); const before=db.db.prepare('SELECT count(*) AS n FROM classes').get()!.n; expect((await request('/demo','POST',{role:'admin'})).status).toBe(403); expect(db.db.prepare('SELECT count(*) AS n FROM classes').get()!.n).toBe(before) })
 })
 
 describe('initial class reset', () => {

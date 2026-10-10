@@ -1,4 +1,4 @@
-export interface Env { DB: D1Database; ASSETS?: Fetcher; AI_API_KEY?: string; API_KEY?: string; AI_BASE_URL?: string; API_BASE?: string; AI_MODEL?: string; MODEL?: string }
+export interface Env { DB: D1Database; ASSETS?: Fetcher; CREATE_CLASS_KEY?: string; AI_API_KEY?: string; API_KEY?: string; AI_BASE_URL?: string; API_BASE?: string; AI_MODEL?: string; MODEL?: string }
 export type Role = 'faculty' | 'cadre' | 'student';
 export interface User { id: string; classId: string; nickname: string; role: 'admin'|'student'; accessRole?: Role }
 export interface Classroom { id: string; name: string; inviteCode?: string; allowSelfJoin?: boolean; isDemo: boolean }
