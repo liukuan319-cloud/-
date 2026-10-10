@@ -19,7 +19,7 @@ export function parseRoster(text:string) {
  }
  return rows;
 }
-const rowSchema=z.object({name:z.string().min(1,'姓名不能为空').max(24,'姓名最多24字'),student_no:z.string().max(64,'学号最多64字'),role:z.enum(['','成员','班干部','student','admin'],{error:'角色必须为班干部或成员'}),note:z.string().max(500,'备注最多500字')});
+const rowSchema=z.object({name:z.string().min(1,'姓名不能为空').max(24,'姓名最多24字'),student_no:z.string().max(64,'学号最多64字'),role:z.enum(['','成员','学生','班干部','student','cadre'],{error:'角色必须为班干部或学生'}),note:z.string().max(500,'备注最多500字')});
 export async function importMembers(env:Env,id:Identity,input:unknown){
  admin(id);
  const {text}=z.object({text:z.string().trim().min(1,'请粘贴名单或上传CSV').max(60000,'名单内容过长')}).parse(input);
@@ -38,10 +38,13 @@ export async function importMembers(env:Env,id:Identity,input:unknown){
   const parsed=rowSchema.safeParse(Object.assign({name:'',student_no:'',role:'',note:''},Object.fromEntries(columns.map((k,i)=>[k,row.cells[i]||'']))));
   if(row.cells.length>columns.length||!parsed.success){errors.push({line:row.line,reason:row.cells.length>columns.length?'列数超出表头':parsed.error!.issues.map(i=>i.message).join('；'),kind:'failed'});continue;}
   const r=parsed.data;
+  if (!r.student_no) { errors.push({line:row.line,reason:'学生和班干部必须填写学号',kind:'failed'}); continue; }
+  if (id.user.accessRole !== 'faculty' && ['班干部','cadre'].includes(r.role)) { errors.push({line:row.line,reason:'只有辅导员可以任命班干部',kind:'failed'}); continue; }
   const duplicate=r.student_no&&numbers.has(r.student_no)?'学号已存在':names.has(r.name)?'姓名已存在':'';
   if(duplicate){errors.push({line:row.line,reason:duplicate,kind:'skipped'});continue;}
   names.add(r.name);if(r.student_no)numbers.add(r.student_no);
-  pendingLines.push(row.line);statements.push(env.DB.prepare('INSERT INTO members(id,class_id,nickname,student_no,role,note,recovery_hash,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(uuid(),id.user.classId,r.name,r.student_no||null,['admin','班干部'].includes(r.role)?'admin':'student',r.note,await hash(secret()),now()));
+  const isCadre=['cadre','班干部'].includes(r.role);
+  pendingLines.push(row.line);statements.push(env.DB.prepare('INSERT INTO members(id,class_id,nickname,student_no,role,note,recovery_hash,created_at,access_role) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(uuid(),id.user.classId,r.name,r.student_no,isCadre?'admin':'student',r.note,await hash(secret()),now(),isCadre?'cadre':'student'));
  }
  let imported=0;
  if(statements.length){const results=await env.DB.batch(statements);for(let i=0;i<results.length;i++){if(results[i].meta.changes)imported++;else errors.push({line:pendingLines[i],reason:'姓名或学号已存在（同时导入）',kind:'skipped'});}}

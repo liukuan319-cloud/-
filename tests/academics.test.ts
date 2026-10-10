@@ -14,7 +14,7 @@ class Statement {
 class TestD1 {
   db = new DatabaseSync(':memory:');
   constructor() {
-    for (const file of ['0001_initial.sql', '0002_members.sql', '0003_join_policy.sql', '0004_member_removal.sql', '0005_timetable_duty.sql', '0006_notice_categories.sql', '0007_academics.sql'])
+    for (const file of ['0001_initial.sql', '0002_members.sql', '0003_join_policy.sql', '0004_member_removal.sql', '0005_timetable_duty.sql', '0006_notice_categories.sql', '0007_academics.sql', '0011_accounts.sql', '0012_schedule_detail.sql'])
       this.db.exec(readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8'));
     for (const classId of ['a', 'b']) this.db.prepare('INSERT INTO classes(id,name,invite_code,created_at) VALUES(?,?,?,?)').run(classId, classId, classId, 'now');
     for (const [id, classId, role] of [[adminId, 'a', 'admin'], [studentId, 'a', 'student'], [otherId, 'b', 'student']])

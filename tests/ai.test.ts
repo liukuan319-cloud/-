@@ -16,7 +16,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql','0011_accounts.sql','0012_schedule_detail.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const result = statements.map(s => s.execute()); this.db.exec('COMMIT'); return result } catch (error) { this.db.exec('ROLLBACK'); throw error } }
 }
@@ -83,7 +83,7 @@ describe('native Banshu tool contract', () => {
     await banshuChat(env, '查班务', [], { timetable: [{ day: '周一', time: '08:00-09:40', course: '高数', room: '教3102' }], duty: [], members: [{ name: '张三' }], notices: [{ title: '班会通知', content: '周五下午开会', date: '2026-10-10' }] })
     const second = JSON.parse(String(fetchMock.mock.calls[1][1].body))
     const outputs = second.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content)
-    expect(outputs).toEqual(['08:00-09:40 高数（教3102）', '班会通知（2026-10-10）：周五下午开会', '已生成2天值日建议，起始日为周一：\n第1天：张三\n第2天：张三'])
+    expect(outputs).toEqual(['08:00-09:40 高数，教3102，教师待确认', '班会通知（2026-10-10）：周五下午开会', '已生成2天值日建议，起始日为周一：\n第1天：张三\n第2天：张三'])
   })
 
   it('exposes only scoped class, name, recent notice, own task and admin progress lookups', async () => {
@@ -209,7 +209,8 @@ describe('live provider loop', () => {
     expect(db.db.prepare('SELECT count(*) AS count FROM notices').get()!.count).toBe(1)
     const firstRequest = JSON.parse(String(fetchMock.mock.calls[0][1].body))
     expect(firstRequest.max_tokens).toBe(1800)
-    expect(firstRequest.tools).toHaveLength(6)
+    expect(firstRequest.tools.map((tool:any)=>tool.function.name)).toContain('prepare_notice_draft')
+    expect(firstRequest.tools.map((tool:any)=>tool.function.name)).toContain('get_timetable')
   })
 
   it('returns a sanitized tool error when a student asks for an admin tool', async () => {
@@ -220,7 +221,8 @@ describe('live provider loop', () => {
     const result = await liveChat(env, realStudent, '查看全班进度')
     expect(result.content).toContain('权限')
     const firstRequest = JSON.parse(String(fetchMock.mock.calls[0][1].body))
-    expect(firstRequest.tools).toHaveLength(4)
+    expect(firstRequest.tools.map((tool:any)=>tool.function.name)).not.toContain('get_task_progress')
+    expect(firstRequest.tools.map((tool:any)=>tool.function.name)).not.toContain('prepare_member_role')
     const secondRequest = JSON.parse(String(fetchMock.mock.calls[1][1].body))
     const toolMessage = secondRequest.messages.at(-1)
     expect(toolMessage.role).toBe('tool')

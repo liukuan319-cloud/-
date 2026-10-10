@@ -24,7 +24,7 @@ type Calendar = {
   semesterStart: string | null
   exams: Exam[]
   events: Event[]
-  timetable: Array<{ day: string; time: string; course: string; room: string }>
+  timetable: Array<{ day: string; time: string; course: string; room: string; teacher?: string; weekStart?: string | null; periodNumber?: number | null; notThisWeek?: number }>
 }
 type Vote = {
   id: string; title: string; description: string; anonymous: boolean; closesAt: string
@@ -94,7 +94,7 @@ function CsvInput({ value, onChange, label }: { value: string; onChange: (value:
 }
 
 export function AcademicsPage({ session, onError }: Props) {
-  const [roster] = useLoad<{ members: Array<{ id: string; nickname: string }> }>(session.user.role === 'admin' ? '/members' : '', onError)
+  const [roster] = useLoad<{ members: Array<{ id: string; nickname: string }> }>(session.user.accessRole !== 'student' ? '/members' : '', onError)
   const [selected, setSelected] = useState(session.user.id)
   const [data, reload] = useLoad<Academics>(`/academics?memberId=${selected}`, onError)
   const [exams] = useLoad<Calendar>('/calendar', onError)
@@ -124,7 +124,7 @@ export function AcademicsPage({ session, onError }: Props) {
   const total = data ? Object.values(data.targets).reduce((sum, count) => sum + count, 0) : 0
   return <div className="feature-page">
     <Heading title="学业中心" detail="绩点、学分和综测只向本人及班干部开放。" />
-    {session.user.role === 'admin' && <label className="feature-select">查看成员
+    {session.user.accessRole !== 'student' && <label className="feature-select">查看成员
       <select value={selected} onChange={event => setSelected(event.target.value)}>
         {roster?.members.map(member => <option key={member.id} value={member.id}>{member.nickname}</option>)}
       </select>
@@ -158,7 +158,7 @@ export function AcademicsPage({ session, onError }: Props) {
         )}</div>
       ) : <Empty text="暂无综测数据" />}</Frame>
     </>}
-    {session.user.role === 'admin' && <Frame title="录入学业数据">
+    {session.user.accessRole !== 'student' && <Frame title="录入学业数据">
       <div className="feature-form-grid">
         <label>学期<input value={semester} onChange={event => setSemester(event.target.value)} /></label>
         <label>类别<select value={category} onChange={event => setCategory(event.target.value)}>
@@ -240,9 +240,9 @@ export function CalendarPage({ session, onError }: Props) {
           {!data.events.length && <Empty text="暂无校历节点" />}
         </Frame>
       </div>
-      <Frame title="课程表"><div className="feature-timetable">{days.map(day => <div key={day}><h3>{day}</h3>{data.timetable.filter(row => row.day === day).map((row, index) => <p key={index}><strong>{row.course}</strong><small>{row.time} · {row.room || '教室待定'}</small></p>)}{!data.timetable.some(row => row.day === day) && <small>无课</small>}</div>)}</div></Frame>
+      <Frame title="课程表"><div className="feature-timetable">{days.map(day => <div key={day}><h3>{day}</h3>{data.timetable.filter(row => row.day === day).map((row, index) => <p key={index}><strong>{row.course}</strong><small>{row.periodNumber ? `第${row.periodNumber}节 · ` : ''}{row.time} · {row.room || '教室待确认'}</small>{row.teacher && <small>{row.teacher}</small>}{row.notThisWeek ? <small>非本周</small> : null}</p>)}{!data.timetable.some(row => row.day === day) && <small>无课</small>}</div>)}</div></Frame>
     </>}
-    {session.user.role === 'admin' && <Frame title="管理考试与校历">
+    {session.user.accessRole !== 'student' && <Frame title="管理考试与校历">
       <div className="feature-form-grid">
         <label>考试名称<input value={exam.name} onChange={event => setExam({ ...exam, name: event.target.value })} /></label>
         <label>类别<input value={exam.category} onChange={event => setExam({ ...exam, category: event.target.value })} /></label>
@@ -286,7 +286,7 @@ export function VotesPage({ session, onError }: Props) {
     finally { setBusy(false) }
   }
   return <div className="feature-page"><Heading title="投票表决" detail="每位成员一票；匿名投票不保存成员身份。" />
-    {session.user.role === 'admin' && <Frame title="发起投票"><form onSubmit={(event: FormEvent) => {
+    {session.user.accessRole !== 'student' && <Frame title="发起投票"><form onSubmit={(event: FormEvent) => {
       event.preventDefault()
       void run(() => post('/votes', { title, description, options, anonymous, closesAt: beijingISOString(closesAt) }))
     }}>
@@ -298,7 +298,7 @@ export function VotesPage({ session, onError }: Props) {
     {!data ? <Loading /> : data.votes.length ? data.votes.map(vote => <Frame key={vote.id} title={vote.title}>
       <div className="feature-vote-meta"><span>{vote.anonymous ? '匿名' : '实名'} · {vote.closed ? '已结束' : '进行中'}</span><span>{vote.total} 人已投 · 截止 {formatDate(vote.closesAt)}</span></div>
       <p>{vote.description}</p>{vote.options.map(option => <div key={option.id} className="feature-vote-option"><div><strong>{option.label}</strong><span>{option.votes} 票 · {vote.total ? Math.round(option.votes / vote.total * 100) : 0}%</span></div><div className="feature-bar"><i style={{ width: `${vote.total ? option.votes / vote.total * 100 : 0}%` }} /></div><Action busy={busy} disabled={vote.closed || !!vote.ownOptionId} onClick={() => run(() => post(`/votes/${vote.id}/cast`, { optionId: option.id }))}>{vote.ownOptionId === option.id ? <><Check size={15} />已投此项</> : vote.ownOptionId ? '已投票' : '投一票'}</Action></div>)}
-      {session.user.role === 'admin' && !vote.closed && <Action busy={busy} onClick={() => run(() => post(`/votes/${vote.id}/end`, {}))}>结束投票</Action>}
+      {session.user.accessRole !== 'student' && !vote.closed && <Action busy={busy} onClick={() => run(() => post(`/votes/${vote.id}/end`, {}))}>结束投票</Action>}
     </Frame>) : <Empty text="暂无投票" />}
   </div>
 }
@@ -308,10 +308,10 @@ export function RemindersPage({ session, onError }: Props) {
   const [rules, setRules] = useState<Rule[]>([])
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (session.user.role === 'admin') void api<{ rules: Rule[] }>('/reminders/rules').then(value => setRules(value.rules)).catch(error => onError(error.message))
-  }, [session.user.role])
+    if (session.user.accessRole !== 'student') void api<{ rules: Rule[] }>('/reminders/rules').then(value => setRules(value.rules)).catch(error => onError(error.message))
+  }, [session.user.accessRole])
   return <div className="feature-page"><Heading title="站内提醒" detail="按北京时间计算，打开班枢即可查看。" />
     <Frame title="我的提醒">{!data ? <Loading /> : data.reminders.length ? data.reminders.map(item => <div className="feature-list-row" key={item.key}><Bell size={18} /><span><strong>{item.message}</strong><small>{labels[item.type]} · {item.dueDate}</small></span></div>) : <Empty text="暂无即将到来的提醒" />}</Frame>
-    {session.user.role === 'admin' && <Frame title="提醒管理">{rules.map((rule, index) => <div className="feature-rule" key={rule.type}><label className="ios-switch"><input type="checkbox" role="switch" checked={rule.enabled} onChange={event => setRules(rules.map((item, i) => i === index ? { ...item, enabled: event.target.checked } : item))} /><span className="ios-switch-track" aria-hidden="true"><span /></span><span>{labels[rule.type]}</span></label><label>提前天数<input type="number" min="0" max="30" value={rule.daysBefore} onChange={event => setRules(rules.map((item, i) => i === index ? { ...item, daysBefore: Number(event.target.value) } : item))} /></label></div>)}<Action busy={busy} onClick={async () => { setBusy(true); try { const result = await api<{ rules: Rule[] }>('/reminders/rules', { method: 'PUT', body: JSON.stringify(rules) }); setRules(result.rules); await reload() } catch (error) { onError((error as Error).message) } finally { setBusy(false) } }}>保存规则</Action></Frame>}
+    {session.user.accessRole !== 'student' && <Frame title="提醒管理">{rules.map((rule, index) => <div className="feature-rule" key={rule.type}><label className="ios-switch"><input type="checkbox" role="switch" checked={rule.enabled} onChange={event => setRules(rules.map((item, i) => i === index ? { ...item, enabled: event.target.checked } : item))} /><span className="ios-switch-track" aria-hidden="true"><span /></span><span>{labels[rule.type]}</span></label><label>提前天数<input type="number" min="0" max="30" value={rule.daysBefore} onChange={event => setRules(rules.map((item, i) => i === index ? { ...item, daysBefore: Number(event.target.value) } : item))} /></label></div>)}<Action busy={busy} onClick={async () => { setBusy(true); try { const result = await api<{ rules: Rule[] }>('/reminders/rules', { method: 'PUT', body: JSON.stringify(rules) }); setRules(result.rules); await reload() } catch (error) { onError((error as Error).message) } finally { setBusy(false) } }}>保存规则</Action></Frame>}
   </div>
 }

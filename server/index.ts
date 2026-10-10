@@ -3,17 +3,20 @@ import { streamSSE } from 'hono/streaming';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import type { AppBindings } from './types';
-import { uuid,now,hash,secret,session,logout,identity,limit,mode,admin } from './auth';
+import { uuid,now,hash,secret,session,logout,identity,limit,mode,admin,faculty } from './auth';
 import { nicknameSchema,dateSchema,calendar,beijingDate } from './validation';
 import { tasks,notices,notice,noticeCategories,members,validateDraft,makeAction,prepareStatus,progress,confirmAction,editNotice,adminTasks } from './business';
-import { demoChat,banshuChat } from './ai';
-import { changeMember } from './member-admin';
+import { demoChat,banshuChat,liveChat } from './ai';
+import { changeMember, resetMemberPassword, changeOwnPassword, transferFaculty } from './member-admin';
 import { importMembers } from './member-import';
 import { getSchedule, importSchedule, replaceSchedule, loadBanshuContext } from './schedule';
 import { getAcademics,setAcademicTargets,createAcademicCourse,updateAcademicCourse,deleteAcademicCourse,setAcademicGrade,setAcademicComprehensive,importAcademicGrades } from './academics';
 import { calendarData,addExam,addCalendarEvent,setSemesterStart,importCalendar } from './calendar';
 import { createVote,listVotes,castVote,endVote } from './votes';
 import { memberReminders,reminderRules,saveReminderRules } from './reminders';
+import { activateMember, hashPassword, loginMember, passwordSchema, studentNoSchema, usernameSchema } from './accounts';
+import { addPersonalTask, personalTasks, setPersonalTaskStatus } from './personal-tasks';
+import { resetClass } from './class-reset';
 const app=new Hono<AppBindings>();
 app.use('/api/*',async(c,next)=>{
  c.header('Cache-Control','no-store');c.header('X-Content-Type-Options','nosniff');
@@ -28,6 +31,8 @@ app.onError((err,c)=>{if(err instanceof z.ZodError)return c.json({error:err.issu
 const json=async(c:any)=>{try{return await c.req.json();}catch{throw new HTTPException(400,{message:'请求格式不正确。'});}};
 app.get('/api/health',c=>c.json({ok:true}));
 app.get('/api/session',async c=>{const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
+app.post('/api/login',async c=>{await limit(c.env,'login-ip:'+(c.req.header('CF-Connecting-IP')||'local'),40,600);const b=z.object({account:z.string().trim().min(1).max(64),password:z.string().min(1).max(100)}).strict().parse(await json(c));await session(c,await loginMember(c.env,b.account,b.password));const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
+app.post('/api/activate',async c=>{await limit(c.env,'activate-ip:'+(c.req.header('CF-Connecting-IP')||'local'),20,600);const b=z.object({studentNo:studentNoSchema,inviteCode:z.string().trim().min(4).max(20),password:passwordSchema,confirmPassword:z.string()}).strict().refine(v=>v.password===v.confirmPassword,'两次密码不一致').parse(await json(c));await session(c,await activateMember(c.env,b.studentNo,b.inviteCode,b.password));const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
 app.post('/api/demo',async c=>{await limit(c.env,'demo:'+(c.req.header('CF-Connecting-IP')||'local'),10,3600);const b=z.object({role:z.enum(['admin','student']).default('student')}).parse(await json(c));const classId=uuid(),adminId=uuid(),studentId=uuid(),code='DEMO-'+Math.random().toString(36).slice(2,8).toUpperCase(),time=now(),dueDay=beijingDate(new Date(Date.now()+86400000)),dueAt=dueDay+'T18:00:00+08:00',demoContent='请有意参加运动会的同学在 '+dueDay+' 18:00 前填写报名表，报名项目和联系电话请确认无误。';await c.env.DB.batch([
  c.env.DB.prepare('INSERT INTO classes(id,name,invite_code,is_demo,created_at) VALUES(?,?,?,?,?)').bind(classId,'示例班级',code,1,time),
  c.env.DB.prepare('INSERT INTO members(id,class_id,nickname,role,recovery_hash,created_at) VALUES(?,?,?,?,?,?)').bind(adminId,classId,'班干部','admin',await hash(secret()),time),
@@ -40,17 +45,24 @@ app.post('/api/demo',async c=>{await limit(c.env,'demo:'+(c.req.header('CF-Conne
  c.env.DB.prepare('INSERT INTO task_recipients(task_id,member_id) VALUES(?,?)').bind(t2,studentId)
  ]);const memberId=b.role==='admin'?adminId:studentId;await session(c,memberId);const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:'demo'});
 });
-app.post('/api/classes',async c=>{await limit(c.env,'classes:'+(c.req.header('CF-Connecting-IP')||'local'),5,3600);const b=z.object({name:z.string().trim().min(1).max(80),nickname:nicknameSchema}).parse(await json(c));const cid=uuid(),mid=uuid(),code=secret().slice(0,10).toUpperCase(),time=now();await c.env.DB.batch([c.env.DB.prepare('INSERT INTO classes(id,name,invite_code,created_at) VALUES(?,?,?,?)').bind(cid,b.name,code,time),c.env.DB.prepare('INSERT INTO members(id,class_id,nickname,role,recovery_hash,created_at) VALUES(?,?,?,?,?,?)').bind(mid,cid,b.nickname,'admin',await hash(secret()),time)]);await session(c,mid);const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
-app.post('/api/join',async c=>{await limit(c.env,'join:'+(c.req.header('CF-Connecting-IP')||'local'),15,3600);const b=z.object({inviteCode:z.string().trim().toUpperCase().min(4).max(20),nickname:nicknameSchema.optional(),studentNo:z.string().trim().max(64).optional()}).parse(await json(c));const cl=await c.env.DB.prepare('SELECT * FROM classes WHERE invite_code=?').bind(b.inviteCode).first<any>();if(!cl)throw new HTTPException(404,{message:'邀请码不存在。'});if(!b.nickname&&!b.studentNo)throw new HTTPException(400,{message:'请输入姓名或学号。'});const byName=b.nickname?await c.env.DB.prepare('SELECT * FROM members WHERE class_id=? AND deleted_at IS NULL AND nickname=?').bind(cl.id,b.nickname).first<any>():null;const byNo=b.studentNo?await c.env.DB.prepare('SELECT * FROM members WHERE class_id=? AND deleted_at IS NULL AND student_no=?').bind(cl.id,b.studentNo).first<any>():null;if(byName&&byNo&&byName.id!==byNo.id)throw new HTTPException(409,{message:'姓名与学号对应不同成员。'});const member=byName||byNo;if(!member){if(!cl.allow_self_join)throw new HTTPException(403,{message:'该班级仅允许名单成员加入。'});if(!b.nickname)throw new HTTPException(403,{message:'学号不在名单中，请使用姓名自行加入，或联系班干部导入名单。'});const mid=uuid();await c.env.DB.prepare('INSERT INTO members(id,class_id,nickname,role,recovery_hash,created_at) VALUES(?,?,?,?,?,?)').bind(mid,cl.id,b.nickname||b.studentNo,'student',await hash(secret()),now()).run();await session(c,mid);}else await session(c,member.id);const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
+app.post('/api/classes',async c=>{await limit(c.env,'classes:'+(c.req.header('CF-Connecting-IP')||'local'),5,3600);const b=z.object({name:z.string().trim().min(1).max(80),nickname:nicknameSchema,username:usernameSchema,password:passwordSchema}).strict().parse(await json(c));const cid=uuid(),mid=uuid(),code=secret().slice(0,10).toUpperCase(),time=now();try{await c.env.DB.batch([c.env.DB.prepare('INSERT INTO classes(id,name,invite_code,created_at) VALUES(?,?,?,?)').bind(cid,b.name,code,time),c.env.DB.prepare('INSERT INTO members(id,class_id,nickname,role,recovery_hash,created_at,access_role,username,password_hash,password_active) VALUES(?,?,?,?,?,?,?,?,?,1)').bind(mid,cid,b.nickname,'admin',await hash(secret()),time,'faculty',b.username,await hashPassword(b.password))]);}catch{throw new HTTPException(409,{message:'辅导员账号已存在，请换一个账号。'});}await session(c,mid);const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
+app.post('/api/join',()=>{throw new HTTPException(410,{message:'请使用学号和班级邀请码激活账号。'});});
 app.delete('/api/session',async c=>{await logout(c);return c.json({ok:true});});
-app.post('/api/invite/rotate',async c=>{const id=await identity(c);admin(id);const code=secret().slice(0,10).toUpperCase();await c.env.DB.prepare('UPDATE classes SET invite_code=? WHERE id=?').bind(code,id.user.classId).run();return c.json({inviteCode:code});});
+app.put('/api/session/password',async c=>{const id=await identity(c);const b=z.object({currentPassword:z.string(),newPassword:passwordSchema}).strict().parse(await json(c));return c.json(await changeOwnPassword(c.env,id,b.currentPassword,b.newPassword));});
+app.post('/api/invite/rotate',async c=>{const id=await identity(c);faculty(id);const code=secret().slice(0,10).toUpperCase();await c.env.DB.prepare('UPDATE classes SET invite_code=? WHERE id=?').bind(code,id.user.classId).run();return c.json({inviteCode:code});});
 app.get('/api/tasks',async c=>{const id=await identity(c);return c.json({tasks:await tasks(c.env,id)});});app.get('/api/admin/tasks',async c=>{const id=await identity(c);return c.json({tasks:await adminTasks(c.env,id)});});
+app.get('/api/personal-tasks',async c=>c.json({tasks:await personalTasks(c.env,await identity(c))}));
+app.post('/api/personal-tasks',async c=>c.json({task:await addPersonalTask(c.env,await identity(c),await json(c))}));
+app.patch('/api/personal-tasks/:id',async c=>c.json(await setPersonalTaskStatus(c.env,await identity(c),c.req.param('id'),await json(c))));
 app.get('/api/notice-categories',async c=>{await identity(c);return c.json({categories:await noticeCategories(c.env)});});
 app.get('/api/notices',async c=>{const id=await identity(c);return c.json({notices:await notices(c.env,id,{q:c.req.query('q'),category:c.req.query('category')})});});app.get('/api/notices/:id',async c=>{const id=await identity(c),n=await notice(c.env,id,c.req.param('id'));const ts=(await tasks(c.env,id)).filter(t=>t.noticeId===n.id);return c.json({notice:n,tasks:ts});});
 app.post('/api/class/members/import',async c=>c.json(await importMembers(c.env,await identity(c),await json(c))));
-app.patch('/api/class/settings',async c=>{const id=await identity(c);admin(id);const b=z.object({allowSelfJoin:z.boolean()}).parse(await json(c));await c.env.DB.prepare('UPDATE classes SET allow_self_join=? WHERE id=?').bind(b.allowSelfJoin?1:0,id.user.classId).run();return c.json({allowSelfJoin:b.allowSelfJoin});});
-app.patch('/api/class/members/:id',async c=>{const id=await identity(c);admin(id);const b=z.object({role:z.enum(['admin','student'])}).parse(await json(c));return c.json(await changeMember(c.env,id,c.req.param('id'),b.role));});
+app.patch('/api/class/settings',async c=>{const id=await identity(c);faculty(id);const b=z.object({name:z.string().trim().min(1).max(80).optional()}).strict().parse(await json(c));if(!b.name)throw new HTTPException(400,{message:'请输入班级名称。'});await c.env.DB.prepare('UPDATE classes SET name=? WHERE id=?').bind(b.name,id.user.classId).run();return c.json({name:b.name});});
+app.post('/api/class/faculty/transfer',async c=>{const id=await identity(c);const b=z.object({memberId:z.string().uuid(),username:usernameSchema}).strict().parse(await json(c));return c.json(await transferFaculty(c.env,id,b.memberId,b.username));});
+app.post('/api/class/reset',async c=>{const id=await identity(c);const b=z.object({confirmation:z.string()}).strict().parse(await json(c));return c.json(await resetClass(c.env,id,b.confirmation));});
+app.patch('/api/class/members/:id',async c=>{const id=await identity(c);const b=z.object({role:z.enum(['cadre','student'])}).strict().parse(await json(c));return c.json(await changeMember(c.env,id,c.req.param('id'),b.role==='cadre'?'admin':'student'));});
 app.delete('/api/class/members/:id',async c=>c.json(await changeMember(c.env,await identity(c),c.req.param('id'),null)));
+app.post('/api/class/members/:id/reset-password',async c=>c.json(await resetMemberPassword(c.env,await identity(c),c.req.param('id'))));
 app.get('/api/members',async c=>{const id=await identity(c);return c.json({members:await members(c.env,id)});});
 app.get('/api/class/schedule',async c=>{const id=await identity(c);return c.json(await getSchedule(c.env,id));});
 app.put('/api/class/schedule',async c=>{const id=await identity(c);return c.json(await replaceSchedule(c.env,id,await json(c)));});
@@ -105,17 +117,7 @@ app.post('/api/chat',async c=>{
    await report(currentMode==='demo'?'正在使用示例规则查询…':'正在连接 AI…');
    let result;
    if(currentMode==='demo')result=await demoChat(c.env,id,b.message,b.sourceDate);
-   else{
-    const context=await loadBanshuContext(c.env,id);
-    const [academic,dates,alerts,votes]=await Promise.all([getAcademics(c.env,id),calendarData(c.env,id),memberReminders(c.env,id),listVotes(c.env,id)]);
-    const agentData={...context.data,academics:academic,exams:dates.exams,calendarEvents:dates.events,reminders:alerts,votes};
-    const previous=await c.env.DB.prepare("SELECT role,content FROM messages WHERE member_id=? AND role IN ('user','assistant') ORDER BY created_at DESC,id DESC LIMIT 12").bind(id.user.id).all<{role:'user'|'assistant';content:string}>();
-    const contextPrompt=`当前北京时间 ${beijingDate()}。本接口仅文字问答，本次模型工具均为只读，不会执行网页操作。发布通知、完成反馈或投票请使用网页按钮。你可以调用工具查询班级、课表、值日、通知、本人任务、本人学业、考试校历、投票、本人提醒和班干部任务进度。只根据工具结果回答，不编造；成员信息不含学号，学业仅为本人。`;
-    await report('正在查询班级数据…');
-    const reply=await banshuChat(c.env,`${contextPrompt}\n用户问题：${b.message}`,previous.results.slice().reverse(),agentData,abort.signal);
-    const visibleNotices=(await notices(c.env,id)).filter(n=>n.status==='published'&&reply.includes(n.title));
-    result={content:reply,cards:visibleNotices.map(n=>({type:'notice' as const,notice:n}))};
-   }
+   else result=await liveChat(c.env,id,b.message,b.sourceDate,report,abort.signal);
    const time=now(),assistantId=uuid();await c.env.DB.batch([
     c.env.DB.prepare('INSERT INTO messages(id,member_id,role,content,cards,created_at) VALUES(?,?,?,?,?,?)').bind(uuid(),id.user.id,'user',b.message,'[]',time),
     c.env.DB.prepare('INSERT INTO messages(id,member_id,role,content,cards,created_at) VALUES(?,?,?,?,?,?)').bind(assistantId,id.user.id,'assistant',result.content,JSON.stringify(result.cards),new Date(Date.now()+1).toISOString())]);

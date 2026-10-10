@@ -1,12 +1,12 @@
 export interface Session {
-  user: { id: string; nickname: string; role: 'admin' | 'student'; classId: string }
+  user: { id: string; nickname: string; role: 'admin' | 'student'; accessRole: 'faculty' | 'cadre' | 'student'; classId: string }
   classroom: { id: string; name: string; inviteCode?: string; allowSelfJoin?: boolean; isDemo: boolean }
   mode: 'demo' | 'live' | 'unconfigured'
 }
 export interface Task { id: string; noticeId: string; title: string; description: string; dueAt: string | null; status: 'pending' | 'completed'; version: number; noticeTitle: string; audience: 'all' | 'selected' }
 export type NoticeCategory = 'important' | 'team' | 'exam' | 'activity' | 'daily'
 export interface Notice { id: string; title: string; content: string; sourceDate: string; sourceTime: string | null; categoryId: NoticeCategory; categoryName: string; categoryColor: string; priority: 'normal' | 'high'; pinned: boolean; createdAt: string; updatedAt: string; version: number; status: 'published' | 'withdrawn'; authorName: string }
-export interface Member { id: string; nickname: string; role: string; studentNo?: string | null; note?: string; status?: string }
+export interface Member { id: string; nickname: string; role: 'faculty' | 'cadre' | 'student'; studentNo?: string | null; note?: string; status?: string; passwordActive?: number }
 export interface DraftTask { title: string; description: string; dueAt: string | null; audience: 'all' | 'selected'; memberIds: string[] }
 export interface Draft { title: string; content: string; sourceDate: string; sourceTime?: string | null; categoryId?: NoticeCategory; priority?: 'normal' | 'high'; pinned?: boolean; tasks: DraftTask[] }
 export interface Action { id: string; type: string; payload: Record<string, unknown>; expiresAt?: string }

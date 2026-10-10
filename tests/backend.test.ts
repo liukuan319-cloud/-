@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import app from '../server/index'
 import { calendar, draftSchema } from '../server/validation'
 import type { Env } from '../server/types'
+import { INITIAL_CLASS_ID, initialRoster, weekSevenCourses, semesterEvents } from '../server/initialization'
 
 /** D1-compatible adapter over actual SQLite; batch is an atomic transaction. */
 class Statement {
@@ -19,7 +20,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql','0011_accounts.sql','0012_schedule_detail.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const results = statements.map(s => s.execute()); this.db.exec('COMMIT'); return results } catch (e) { this.db.exec('ROLLBACK'); throw e } }
 }
@@ -32,13 +33,17 @@ async function request(path: string, method = 'GET', body?: unknown, cookie?: st
   return app.request(`https://class.test/api${path}`, { method, headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}), ...headers }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }, env)
 }
 async function signup(name = '测试班级', nickname = '班干部') {
-  const response = await request('/classes', 'POST', { name, nickname })
+  const response = await request('/classes', 'POST', { name, nickname, username: `faculty_${crypto.randomUUID().slice(0, 8)}`, password: 'Banshu2026' })
   expect(response.status).toBe(200)
   return { ...(await response.json()) as any, cookie: response.headers.get('set-cookie')!.split(';')[0], response }
 }
 async function join(owner: any, nickname = '同学甲') {
-  await request('/class/members/import','POST',{text:nickname},owner.cookie)
-  const response = await request('/join', 'POST', { inviteCode: owner.classroom.inviteCode, nickname })
+  const number = `20${crypto.randomUUID().replace(/\D/g,'').slice(0, 10).padEnd(10,'0')}`
+  const existing = db.db.prepare('SELECT id,student_no FROM members WHERE class_id=? AND nickname=? AND deleted_at IS NULL').get(owner.classroom.id,nickname) as {id:string;student_no:string|null}|undefined
+  if (existing) db.db.prepare('UPDATE members SET student_no=? WHERE id=?').run(existing.student_no || number,existing.id)
+  else await request('/class/members/import','POST',{text:`${nickname},${number}`},owner.cookie)
+  const studentNo = (db.db.prepare('SELECT student_no FROM members WHERE class_id=? AND nickname=? AND deleted_at IS NULL').get(owner.classroom.id,nickname) as {student_no:string}).student_no
+  const response = await request('/activate', 'POST', { inviteCode: owner.classroom.inviteCode, studentNo, password:'Student2026', confirmPassword:'Student2026' })
   expect(response.status).toBe(200)
   return { ...(await response.json()) as any, cookie: response.headers.get('set-cookie')!.split(';')[0] }
 }
@@ -80,7 +85,7 @@ describe('same-origin Banshu API contract', () => {
     expect(response.headers.get('content-type')).toContain('text/event-stream')
     expect(stream).toContain('周一有数据库课程')
     const providerBodies = provider.mock.calls.map(call => JSON.parse(String(call[1].body)))
-    expect(JSON.stringify(providerBodies)).toContain('08:00-09:40 数据库课程（教3102）')
+    expect(JSON.stringify(providerBodies)).toContain('08:00-09:40 数据库课程，教3102，教师待确认')
   })
 })
 
@@ -136,6 +141,21 @@ async function getTasks(user: any) { return (await (await request('/tasks', 'GET
 async function taskAction(user: any, task: any, status = 'completed') { const response = await request('/actions', 'POST', { type: 'task_status', taskId: task.id, version: task.version, status }, user.cookie); expect(response.status).toBe(200); return (await response.json() as any).action }
 
 describe('identity and authentication', () => {
+  it('hashes passwords, locks after five failures and requires reset to reactivate', async () => {
+    const owner = await signup()
+    const account = db.db.prepare('SELECT username,password_hash FROM members WHERE id=?').get(owner.user.id) as {username:string;password_hash:string}
+    expect(account.password_hash).toMatch(/^pbkdf2-sha256\$100000\$/)
+    expect(account.password_hash).not.toContain('Banshu2026')
+    for (let attempt=0;attempt<4;attempt++) expect((await request('/login','POST',{account:account.username,password:'Wrong2026'})).status).toBe(401)
+    expect((await request('/login','POST',{account:account.username,password:'Wrong2026'})).status).toBe(401)
+    expect((await request('/login','POST',{account:account.username,password:'Banshu2026'})).status).toBe(429)
+    const student = await join(owner)
+    expect((await request(`/class/members/${student.user.id}/reset-password`,'POST',{},owner.cookie)).status).toBe(200)
+    expect((await request('/session','GET',undefined,student.cookie)).status).toBe(401)
+    const studentNo = (db.db.prepare('SELECT student_no FROM members WHERE id=?').get(student.user.id) as {student_no:string}).student_no
+    expect((await request('/login','POST',{account:studentNo,password:'Student2026'})).status).toBe(403)
+    expect((await request('/activate','POST',{studentNo,inviteCode:owner.classroom.inviteCode,password:'Again2026',confirmPassword:'Again2026'})).status).toBe(200)
+  })
   it('requires identity for every class read', async () => { expect((await request('/tasks')).status).toBe(401); expect((await request('/notices')).status).toBe(401) })
   it('creates an administrator with a secure cookie and only stores credential hashes', async () => {
     const owner = await signup()
@@ -148,12 +168,89 @@ describe('identity and authentication', () => {
     expect(read.user.id).toBe(owner.user.id); expect(read.recoveryCode).toBeUndefined()
   })
   it('joins as a student and does not disclose the class invitation', async () => { const owner = await signup(); const student = await join(owner); expect(student.user.role).toBe('student'); expect(student.classroom.inviteCode).toBeUndefined() })
-  it('reuses the allowlisted identity by name or student number and rejects strangers', async () => { const owner = await signup(); await request('/class/members/import','POST',{text:'同学甲,202601'},owner.cookie); const student=await join(owner); const r=await request('/join','POST',{inviteCode:owner.classroom.inviteCode,studentNo:'202601'}); expect(r.status).toBe(200); expect((await r.json() as any).user.id).toBe(student.user.id); expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'陌生人'})).status).toBe(403); expect(db.db.prepare('SELECT count(*) count FROM members').get()!.count).toBe(2) })
+  it('activates once and then signs in with a password', async () => { const owner = await signup(); await request('/class/members/import','POST',{text:'同学甲,202601'},owner.cookie); const student=await join(owner); const r=await request('/login','POST',{account:'202601',password:'Student2026'}); expect(r.status).toBe(200); expect((await r.json() as any).user.id).toBe(student.user.id); expect((await request('/activate','POST',{inviteCode:owner.classroom.inviteCode,studentNo:'202601',password:'Student2026',confirmPassword:'Student2026'})).status).toBe(409); expect((await request('/activate','POST',{inviteCode:owner.classroom.inviteCode,studentNo:'999',password:'Student2026',confirmPassword:'Student2026'})).status).toBe(403) })
   it('removes recovery credentials and disables recovery endpoint', async () => { const owner = await signup(); expect(owner.recoveryCode).toBeUndefined(); expect((await request('/session/recover', 'POST', { recoveryCode: 'x'.repeat(64) })).status).toBe(404); const demo=await (await request('/demo','POST',{role:'admin'})).json() as any; expect(demo.recoveryCode).toBeUndefined() })
   it('revokes the current session on logout', async () => { const owner = await signup(); expect((await request('/session', 'DELETE', undefined, owner.cookie)).status).toBe(200); expect((await request('/session', 'GET', undefined, owner.cookie)).status).toBe(401) })
-  it('rotates invitation codes without removing existing members', async () => { const owner = await signup(); const student = await join(owner); const response = await request('/invite/rotate', 'POST', {}, owner.cookie); expect(response.status).toBe(200); expect((await request('/join', 'POST', { inviteCode: owner.classroom.inviteCode, nickname: '后来同学' })).status).toBe(404); expect((await request('/session', 'GET', undefined, student.cookie)).status).toBe(200) })
+  it('rotates invitation codes without removing existing members', async () => { const owner = await signup(); const student = await join(owner); const response = await request('/invite/rotate', 'POST', {}, owner.cookie); expect(response.status).toBe(200); expect((await request('/activate', 'POST', { inviteCode: owner.classroom.inviteCode, studentNo: '999',password:'Student2026',confirmPassword:'Student2026' })).status).toBe(403); expect((await request('/session', 'GET', undefined, student.cookie)).status).toBe(200) })
   it('blocks cross-origin mutations and invalid JSON', async () => { expect((await request('/classes', 'POST', { name: 'X', nickname: 'Y' }, undefined, { Origin: 'https://evil.example' })).status).toBe(403); const response = await app.request('https://class.test/api/classes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bad' }, env); expect(response.status).toBe(400) })
   it('keeps each demo class separate from other demo and real classes', async () => { const one = await (await request('/demo', 'POST', { role: 'admin' })).json() as any; const two = await (await request('/demo', 'POST', { role: 'student' })).json() as any; const real = await signup(); expect(one.mode).toBe('demo'); expect(one.classroom.id).not.toBe(two.classroom.id); expect(one.classroom.id).not.toBe(real.classroom.id) })
+})
+
+describe('initial class reset', () => {
+  it('retains faculty and seeds the specified roster, schedule and calendar only in that class', async () => {
+    const owner=await signup(), other=await signup('另一班')
+    db.db.exec('PRAGMA foreign_keys=OFF')
+    db.db.prepare('UPDATE classes SET id=? WHERE id=?').run(INITIAL_CLASS_ID,owner.classroom.id)
+    db.db.prepare('UPDATE members SET class_id=? WHERE class_id=?').run(INITIAL_CLASS_ID,owner.classroom.id)
+    db.db.exec('PRAGMA foreign_keys=ON')
+    const response=await request('/class/reset','POST',{confirmation:'清空本班数据'},owner.cookie)
+    expect(response.status).toBe(200)
+    expect(db.db.prepare('SELECT count(*) AS n FROM members WHERE class_id=? AND deleted_at IS NULL').get(INITIAL_CLASS_ID)!.n).toBe(initialRoster.length+1)
+    expect(db.db.prepare('SELECT count(*) AS n FROM timetable_entries WHERE class_id=?').get(INITIAL_CLASS_ID)!.n).toBe(weekSevenCourses.length)
+    expect(db.db.prepare('SELECT count(*) AS n FROM calendar_events WHERE class_id=?').get(INITIAL_CLASS_ID)!.n).toBe(semesterEvents.length)
+    expect(db.db.prepare('SELECT nickname FROM members WHERE id=?').get(owner.user.id)!.nickname).toBe('罗文杰')
+    expect(db.db.prepare('SELECT count(*) AS n FROM members WHERE class_id=?').get(other.classroom.id)!.n).toBe(1)
+  })
+})
+
+describe('confirmed AI actions', () => {
+  it('resets a class only once through an owned confirmation card',async()=>{
+    const owner=await signup(),other=await signup('其他班');await publish(owner);const prepared=db.db.prepare('INSERT INTO actions(id,class_id,member_id,type,payload,expires_at) VALUES(?,?,?,?,?,?)');prepared.run('reset-action',owner.classroom.id,owner.user.id,'class_reset','{}',new Date(Date.now()+60000).toISOString());
+    expect((await request('/actions/reset-action/confirm','POST',{},other.cookie)).status).toBe(404);
+    expect((await request('/actions/reset-action/confirm','POST',{},owner.cookie)).status).toBe(200);
+    expect(db.db.prepare('SELECT count(*) AS n FROM notices WHERE class_id=?').get(owner.classroom.id)!.n).toBe(0);
+    expect((await request('/actions/reset-action/confirm','POST',{},owner.cookie)).status).toBe(200);
+    expect(db.db.prepare("SELECT count(*) AS n FROM audit_log WHERE action='class_reset' AND class_id=?").get(owner.classroom.id)!.n).toBe(1);
+    expect(db.db.prepare('SELECT count(*) AS n FROM members WHERE class_id=?').get(other.classroom.id)!.n).toBe(1);
+  });
+  it('prepares a vote without writing, then confirms it once in the same class', async () => {
+    env.API_KEY='test-only-key';const owner=await signup(),other=await signup('第二班');let call=0;
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({choices:[{message:call++===0?{content:null,tool_calls:[{id:'vote-call',type:'function',function:{name:'prepare_vote',arguments:JSON.stringify({title:'周末聚餐',description:'班级活动',closesAt:'2027-10-10T18:00:00+08:00',options:['参加','不参加']})}}]}:{content:'投票确认卡已准备好，请确认。'}}]})));
+    const response=await request('/chat','POST',{message:'发起投票：周末聚餐去不去'},owner.cookie);
+    expect(response.status).toBe(200);const stream=await response.text();expect(stream).toContain('create_vote');
+    const action=db.db.prepare("SELECT id FROM actions WHERE class_id=? AND type='create_vote'").get(owner.classroom.id) as {id:string};
+    expect(db.db.prepare('SELECT count(*) AS n FROM votes').get()!.n).toBe(0);
+    expect((await request(`/actions/${action.id}/confirm`,'POST',{},other.cookie)).status).toBe(404);
+    expect((await request(`/actions/${action.id}/confirm`,'POST',{},owner.cookie)).status).toBe(200);
+    expect((await request(`/actions/${action.id}/confirm`,'POST',{},owner.cookie)).status).toBe(200);
+    expect(db.db.prepare('SELECT count(*) AS n FROM votes WHERE class_id=?').get(owner.classroom.id)!.n).toBe(1);
+    expect(db.db.prepare('SELECT count(*) AS n FROM votes WHERE class_id=?').get(other.classroom.id)!.n).toBe(0);
+  });
+
+  it('keeps management tools unavailable to students even when a provider requests one', async () => {
+    env.API_KEY='test-only-key';const owner=await signup(),student=await join(owner);let call=0;
+    vi.stubGlobal('fetch',vi.fn(async(_url:string,init:any)=>{const body=JSON.parse(init.body);if(call===0){expect(body.tools.map((tool:any)=>tool.function.name)).not.toContain('prepare_member_role');expect(body.tools.map((tool:any)=>tool.function.name)).toContain('prepare_personal_tasks')}return Response.json({choices:[{message:call++===0?{content:null,tool_calls:[{id:'role-call',type:'function',function:{name:'prepare_member_role',arguments:'{"memberName":"同学甲","role":"cadre"}'}}]}:{content:'没有权限修改角色。'}}]})}));
+    const response=await request('/chat','POST',{message:'把同学甲设为班干部'},student.cookie);
+    expect(await response.text()).toContain('没有权限');
+    expect(db.db.prepare("SELECT count(*) AS n FROM actions WHERE type='member_role'").get()!.n).toBe(0);
+  });
+})
+
+describe('faculty transfer',()=>{
+  it('retires the old account and gives the activated successor a faculty username',async()=>{
+    const owner=await signup(),successor=await join(owner),other=await signup('隔离班');
+    const result=await request('/class/faculty/transfer','POST',{memberId:successor.user.id,username:'successor_2026'},owner.cookie);
+    expect(result.status).toBe(200);
+    expect((await request('/session','GET',undefined,owner.cookie)).status).toBe(401);
+    expect((await request('/session','GET',undefined,successor.cookie)).status).toBe(401);
+    const login=await request('/login','POST',{account:'successor_2026',password:'Student2026'});
+    expect(login.status).toBe(200);
+    expect((await login.json() as any).user.accessRole).toBe('faculty');
+    expect(db.db.prepare('SELECT count(*) AS n FROM members WHERE class_id=? AND access_role=? AND deleted_at IS NULL').get(owner.classroom.id,'faculty')!.n).toBe(1);
+    expect(db.db.prepare('SELECT count(*) AS n FROM members WHERE class_id=? AND access_role=? AND deleted_at IS NULL').get(other.classroom.id,'faculty')!.n).toBe(1);
+    expect(db.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+})
+
+describe('week-specific schedule preservation',()=>{
+  it('keeps seeded week-seven courses when recurring rows are edited or imported',async()=>{
+    const owner=await signup();
+    db.db.prepare('INSERT INTO timetable_entries(id,class_id,weekday,period,course,room,position,week_start,period_number,teacher) VALUES(?,?,?,?,?,?,?,?,?,?)').run('week-seven',owner.classroom.id,'周一','08:00-08:45','第七周课程','文202',1,'2026-10-12',1,'任课教师');
+    expect((await request('/class/schedule','PUT',{timetable:[{day:'周二',time:'10:00-10:45',course:'常规课程',room:'教101'}],duty:[]},owner.cookie)).status).toBe(200);
+    expect((await request('/class/schedule/import','POST',{timetable:'day,time,course,room\n周三,14:30-15:15,导入课程,教102',duty:''},owner.cookie)).status).toBe(200);
+    expect(db.db.prepare("SELECT count(*) AS n FROM timetable_entries WHERE class_id=? AND week_start='2026-10-12'").get(owner.classroom.id)!.n).toBe(1);
+    expect(db.db.prepare("SELECT count(*) AS n FROM timetable_entries WHERE class_id=? AND week_start IS NULL").get(owner.classroom.id)!.n).toBe(2);
+  });
 })
 
 describe('business permissions and confirmations', () => {
@@ -222,57 +319,52 @@ describe('member import', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({imported:50,skipped:0,failed:0})
     const again = await request('/class/members/import', 'POST', {text:'name,student_no,role,note\n不同名字,S0,成员,\n学生1,,成员,\n坏角色,S99,老师,\n"带,逗号",S100,班干部,"两行\n备注"'}, owner.cookie)
-    expect(await again.json()).toMatchObject({imported:1,skipped:2,failed:1,errors:expect.arrayContaining([expect.objectContaining({line:4})])})
+    expect(await again.json()).toMatchObject({imported:1,skipped:1,failed:2,errors:expect.arrayContaining([expect.objectContaining({line:4})])})
     const roster = await (await request('/members','GET',undefined,owner.cookie)).json() as any
     expect(roster.members).toHaveLength(52)
-    expect(roster.members.find((m:any)=>m.studentNo==='S100')).toMatchObject({nickname:'带,逗号',role:'admin',note:'两行\n备注'})
+    expect(roster.members.find((m:any)=>m.studentNo==='S100')).toMatchObject({nickname:'带,逗号',role:'cadre',note:'两行\n备注'})
   })
   it('requires admin and validates input/header while allowing the same number in another class', async () => {
     const owner = await signup(), student = await join(owner), other = await signup('别班')
     expect((await request('/class/members/import','POST',{text:'学生,1'},student.cookie)).status).toBe(403)
     expect((await request('/class/members/import','POST',{text:''},owner.cookie)).status).toBe(400)
     expect((await request('/class/members/import','POST',{text:'name,name\n学生,学生'},owner.cookie)).status).toBe(400)
-    for (const user of [owner,other]) expect(await (await request('/class/members/import','POST',{text:'学生,1'},user.cookie)).json()).toMatchObject({imported:1})
+    expect(await (await request('/class/members/import','POST',{text:'学生,1'},owner.cookie)).json()).toMatchObject({imported:1})
+    expect(await (await request('/class/members/import','POST',{text:'学生,1'},other.cookie)).json()).toMatchObject({imported:0,skipped:1})
   })
 })
 
 
 describe('join policy',()=>{
- it('only admins may enable self join; new identities remain students',async()=>{
+ it('keeps class settings faculty-only and disables old invite login',async()=>{
   const owner=await signup();const student=await join(owner);
   expect((await request('/class/settings','PATCH',{allowSelfJoin:true},student.cookie)).status).toBe(403);
-  expect((await request('/class/settings','PATCH',{allowSelfJoin:true},owner.cookie)).status).toBe(200);
-  const r=await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'新同学',role:'admin'});expect(r.status).toBe(200);expect((await r.json() as any).user.role).toBe('student');
-  await request('/class/settings','PATCH',{allowSelfJoin:false},owner.cookie);
-  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'另一位'})).status).toBe(403);
-  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'新同学'})).status).toBe(200);
-  await request('/class/settings','PATCH',{allowSelfJoin:true},owner.cookie);expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,studentNo:'99999'})).status).toBe(403);
+  expect((await request('/class/settings','PATCH',{name:'新班名'},owner.cookie)).status).toBe(200);
+  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'新同学'})).status).toBe(410);
  });
- it('rejects conflicting name and student number instead of choosing an identity',async()=>{
+ it('rejects activation when student number and invite code do not belong together',async()=>{
   const owner=await signup();await request('/class/members/import','POST',{text:'同学甲,001\n同学乙,002'},owner.cookie);
-  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,nickname:'同学甲',studentNo:'002'})).status).toBe(409);
+  const other=await signup('其他班');
+  expect((await request('/activate','POST',{inviteCode:other.classroom.inviteCode,studentNo:'001',password:'Student2026',confirmPassword:'Student2026'})).status).toBe(403);
  });
 })
 
 describe('member administration',()=>{
- it('changes roles, revokes sessions and protects the last administrator',async()=>{
+ it('changes roles, revokes sessions and protects the faculty account',async()=>{
   const owner=await signup(), student=await join(owner);
-  expect((await request(`/class/members/${owner.user.id}`,'PATCH',{role:'student'},owner.cookie)).status).toBe(409);
-  expect((await request(`/class/members/${owner.user.id}`,'DELETE',{},owner.cookie)).status).toBe(409);
+  expect((await request(`/class/members/${owner.user.id}`,'PATCH',{role:'student'},owner.cookie)).status).toBe(403);
+  expect((await request(`/class/members/${owner.user.id}`,'DELETE',{},owner.cookie)).status).toBe(403);
   expect((await request(`/class/members/${owner.user.id}`,'PATCH',{role:'student'},student.cookie)).status).toBe(403);
-  expect((await request(`/class/members/${student.user.id}`,'PATCH',{role:'admin'},owner.cookie)).status).toBe(200);
+  expect((await request(`/class/members/${student.user.id}`,'PATCH',{role:'cadre'},owner.cookie)).status).toBe(200);
   expect((await request('/session','GET',undefined,student.cookie)).status).toBe(401);
-  const newAdmin=await join(owner);
-  const responses=await Promise.all([request(`/class/members/${owner.user.id}`,'PATCH',{role:'student'},newAdmin.cookie),request(`/class/members/${newAdmin.user.id}`,'PATCH',{role:'student'},owner.cookie)]);
-  expect(responses.filter(r=>r.status===200)).toHaveLength(1);expect([401,403,409]).toContain(responses.find(r=>r.status!==200)!.status);
-  expect(db.db.prepare("SELECT count(*) count FROM members WHERE role='admin' AND deleted_at IS NULL").get()!.count).toBe(1);
+  expect(db.db.prepare("SELECT count(*) count FROM members WHERE access_role='faculty' AND deleted_at IS NULL").get()!.count).toBe(1);
  });
  it('removes members from login/roster/statistics but preserves authorship and references',async()=>{
   const owner=await signup();await request('/class/members/import','POST',{text:'同学甲,001'},owner.cookie);const student=await join(owner);const pub=await publish(owner);const task=(await getTasks(student))[0];const action=await taskAction(student,task);await request(`/actions/${action.id}/confirm`,'POST',{},student.cookie);
-  await request(`/class/members/${student.user.id}`,'PATCH',{role:'admin'},owner.cookie);const author=await join(owner);await publish(author);
+  await request(`/class/members/${student.user.id}`,'PATCH',{role:'cadre'},owner.cookie);const authorLogin=await request('/login','POST',{account:'001',password:'Student2026'});const author={cookie:authorLogin.headers.get('set-cookie')!.split(';')[0]};await publish(author);
   expect((await request(`/class/members/${student.user.id}`,'DELETE',{},owner.cookie)).status).toBe(200);
   expect((await request('/session','GET',undefined,author.cookie)).status).toBe(401);
-  expect((await request('/join','POST',{inviteCode:owner.classroom.inviteCode,studentNo:'001'})).status).toBe(403);
+  expect((await request('/login','POST',{account:'001',password:'Student2026'})).status).toBe(401);
   const roster=await (await request('/members','GET',undefined,owner.cookie)).json() as any;expect(roster.members).toHaveLength(1);
   const progress=await (await request(`/tasks/${task.id}/progress`,'GET',undefined,owner.cookie)).json() as any;expect(progress.total).toBe(1);
   expect(db.db.prepare('SELECT count(*) count FROM task_status WHERE member_id=?').get(student.user.id)!.count).toBe(1);

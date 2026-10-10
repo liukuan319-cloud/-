@@ -12,7 +12,7 @@ const payloadSchema = z.object({ timetable: z.array(timetableRow).max(500), duty
 
 export async function getSchedule(env: Env, id: Identity) {
   const [timetable, duty] = await Promise.all([
-    env.DB.prepare('SELECT weekday AS day,period AS time,course,room FROM timetable_entries WHERE class_id=? ORDER BY position,id').bind(id.user.classId).all<{ day: string; time: string; course: string; room: string }>(),
+    env.DB.prepare('SELECT weekday AS day,period AS time,course,room,teacher,week_start AS weekStart,period_number AS periodNumber,not_this_week AS notThisWeek FROM timetable_entries WHERE class_id=? ORDER BY position,id').bind(id.user.classId).all<{ day: string; time: string; course: string; room: string; teacher:string; weekStart:string|null; periodNumber:number|null; notThisWeek:number }>(),
     env.DB.prepare('SELECT d.weekday AS day,m.nickname AS name FROM duty_entries d JOIN members m ON m.id=d.member_id WHERE d.class_id=? AND m.deleted_at IS NULL ORDER BY d.position,d.id').bind(id.user.classId).all<{ day: string; name: string }>(),
   ]);
   return { timetable: timetable.results, duty: duty.results.map(row => ({ ...row, member: row.name })) };
@@ -30,7 +30,7 @@ export async function replaceSchedule(env: Env, id: Identity, input: unknown) {
   }
   if (names.some(name => !memberIds.has(name))) throw new HTTPException(400, { message: '值日成员不存在或不属于当前班级。' });
   const statements = [
-    env.DB.prepare('DELETE FROM timetable_entries WHERE class_id=?').bind(id.user.classId),
+    env.DB.prepare('DELETE FROM timetable_entries WHERE class_id=? AND week_start IS NULL').bind(id.user.classId),
     env.DB.prepare('DELETE FROM duty_entries WHERE class_id=?').bind(id.user.classId),
     ...data.timetable.map((row, position) => env.DB.prepare('INSERT INTO timetable_entries(id,class_id,weekday,period,course,room,position) VALUES(?,?,?,?,?,?,?)').bind(uuid(), id.user.classId, row.day, row.time, row.course, row.room, position)),
     ...data.duty.map((row, position) => env.DB.prepare('INSERT INTO duty_entries(id,class_id,weekday,member_id,position) VALUES(?,?,?,?,?)').bind(uuid(), id.user.classId, row.day, memberIds.get(row.name)!, position)),
@@ -78,7 +78,7 @@ export async function importSchedule(env: Env, id: Identity, input: unknown) {
     return { rows, errors };
   };
   const t = parse(body.timetable, 'timetable'), d = parse(body.duty, 'duty');
-  const combined = payloadSchema.parse({ timetable: [...existing.timetable, ...t.rows], duty: [...existing.duty.map(row => ({ day: row.day, name: row.name })), ...d.rows] });
+  const combined = payloadSchema.parse({ timetable: [...existing.timetable.filter(row => !row.weekStart).map(row => ({ day: row.day, time: row.time, course: row.course, room: row.room })), ...t.rows], duty: [...existing.duty.map(row => ({ day: row.day, name: row.name })), ...d.rows] });
   const saved = await replaceSchedule(env, id, combined);
   return { timetable: { imported: t.rows.length, failed: t.errors.length, errors: t.errors }, duty: { imported: d.rows.length, failed: d.errors.length, errors: d.errors }, saved };
 }
@@ -87,7 +87,7 @@ export async function loadBanshuContext(env: Env, id: Identity) {
   const schedule = await getSchedule(env, id);
   const [classroom, people, recent, ownTasks] = await Promise.all([
     env.DB.prepare('SELECT name FROM classes WHERE id=?').bind(id.user.classId).first<{ name: string }>(),
-    env.DB.prepare('SELECT nickname,role FROM members WHERE class_id=? AND deleted_at IS NULL ORDER BY created_at,id').bind(id.user.classId).all<{ nickname: string; role: string }>(),
+    env.DB.prepare('SELECT nickname,access_role AS role FROM members WHERE class_id=? AND deleted_at IS NULL ORDER BY created_at,id').bind(id.user.classId).all<{ nickname: string; role: string }>(),
     env.DB.prepare("SELECT title,content,source_date AS date FROM notices WHERE class_id=? AND status='published' AND source_date>=date('now','-7 days') ORDER BY source_date DESC,created_at DESC LIMIT 50").bind(id.user.classId).all<{ title: string; content: string; date: string }>(),
     tasks(env, id),
   ]);
@@ -98,9 +98,9 @@ export async function loadBanshuContext(env: Env, id: Identity) {
     members: people.results.map(person => ({ name: person.nickname, role: person.role })),
     notices: recent.results,
     className: classroom?.name || '',
-    role: id.user.role,
+    role: id.user.accessRole || (id.user.role === 'admin' ? 'cadre' : 'student'),
     ownTasks: ownTasks.map(task => ({ title: task.title, description: task.description, dueAt: task.dueAt, status: task.status })),
     adminProgress,
   };
-  return { className: classroom?.name || '', role: id.user.role, data, ownTasks: data.ownTasks };
+  return { className: classroom?.name || '', role: data.role, data, ownTasks: data.ownTasks };
 }
