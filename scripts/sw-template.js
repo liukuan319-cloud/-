@@ -5,7 +5,7 @@ const DATA_CACHE = `banshu-data-${VERSION}`;
 const ASSETS = __PWA_ASSETS__;
 const READ_PATHS = new Set([
   '/api/notices', '/api/tasks', '/api/class/schedule', '/api/calendar',
-  '/api/personal-tasks', '/api/votes', '/api/members',
+  '/api/personal-tasks', '/api/votes',
 ]);
 const SESSION_KEY = '/__pwa/session';
 
