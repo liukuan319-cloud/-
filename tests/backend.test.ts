@@ -20,7 +20,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql','0011_accounts.sql','0012_schedule_detail.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql','0011_accounts.sql','0012_schedule_detail.sql','0013_class_records.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const results = statements.map(s => s.execute()); this.db.exec('COMMIT'); return results } catch (e) { this.db.exec('ROLLBACK'); throw e } }
 }
@@ -48,6 +48,19 @@ async function join(owner: any, nickname = '同学甲') {
   return { ...(await response.json()) as any, cookie: response.headers.get('set-cookie')!.split(';')[0] }
 }
 const draft = (overrides: Record<string, unknown> = {}) => ({ title: '运动会报名', content: '请于 2026 年 10 月 12 日 18:00 前提交报名表。', sourceDate: '2026-10-08', tasks: [{ title: '提交报名表', description: '检查报名项目后交给班干部。', dueAt: '2026-10-12T18:00:00+08:00', audience: 'all', memberIds: [] }], ...overrides })
+
+describe('structured class records', () => {
+  it('lets only staff add scoped records and lets class members read them', async () => {
+    const owner = await signup(), student = await join(owner), other = await signup('其他班级')
+    const input = { kind: 'fee', title: '十月班费支出', detail: '购买班会用品', amountCents: 2500, feeDirection: 'expense' }
+    expect((await request('/class/records', 'POST', input, student.cookie)).status).toBe(403)
+    expect((await request('/class/records', 'POST', input, owner.cookie)).status).toBe(200)
+    const own = await (await request('/class/records', 'GET', undefined, student.cookie)).json() as any
+    const foreign = await (await request('/class/records', 'GET', undefined, other.cookie)).json() as any
+    expect(own.records).toMatchObject([{ kind: 'fee', amountCents: 2500, feeDirection: 'expense', title: '十月班费支出' }])
+    expect(foreign.records).toEqual([])
+  })
+})
 
 describe('class creation access', () => {
   const body = { name: '测试班级', nickname: '辅导员', username: 'faculty_test', password: 'Banshu2026' }

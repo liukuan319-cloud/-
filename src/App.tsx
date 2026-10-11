@@ -8,13 +8,14 @@ import { AcademicsPage, CalendarPage, VotesPage, RemindersPage } from './Expande
 import { AuthPage } from './AuthPage'
 import { AccountSettings } from './AccountSettings'
 import { PersonalTasks } from './PersonalTasks'
+import { ClassRecordsPage } from './ClassRecordsPage'
 
-type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'academics' | 'calendar' | 'votes' | 'reminders'
+type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'academics' | 'calendar' | 'votes' | 'reminders' | 'records'
 const primaryNav = [
   { id: 'ai' as const, name: '首页' },
   { id: 'notices' as const, name: '通知', items: ['全部', '重要公告', '组队通知', '考证考试', '活动报名', '日常事务'] },
   { id: 'academics' as const, name: '学业', items: ['学业概览', '课程表', '考试安排'] },
-  { id: 'settings' as const, name: '班级', items: ['班级概览', '日历', '投票', '提醒', '成员名单', '班级设置'] },
+  { id: 'settings' as const, name: '班级', items: ['班级概览', '事务记录', '日历', '投票', '提醒', '成员名单', '班级设置'] },
   { id: 'tasks' as const, name: '更多', items: ['我的待办', '站内提醒', '班级设置'] },
 ] as const
 const uid = () => crypto.randomUUID()
@@ -99,6 +100,7 @@ export default function App() {
     else if (item === '学业概览') navigate('academics', item)
     else if (item === '课程表' || item === '考试安排') navigate('calendar', item)
     else if (item === '日历') navigate('calendar', item)
+    else if (item === '事务记录') navigate('records', item)
     else if (item === '投票') navigate('votes', item)
     else if (item === '提醒' || item === '站内提醒') navigate('reminders', item)
     else if (item === '班级设置' || item === '班级概览' || item === '成员名单') navigate('settings', item)
@@ -138,6 +140,7 @@ export default function App() {
         {page === 'tasks' && <><TasksPage tasks={tasks} loading={loading} onTask={prepareTask} onNotice={showNotice} /><PersonalTasks onError={setError} /></>}
         {page === 'academics' && <AcademicsPage session={session} onError={setError} />}
         {page === 'calendar' && <CalendarPage session={session} onError={setError} />}
+        {page === 'records' && <ClassRecordsPage session={session} onError={setError} />}
         {page === 'votes' && <VotesPage session={session} onError={setError} />}
         {page === 'reminders' && <RemindersPage session={session} onError={setError} />}
         {page === 'notices' && <NoticesPage notices={notices} loading={loading} category={noticeCategory} memberId={session.user.id} onNotice={setSelectedNotice} />}

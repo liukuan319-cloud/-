@@ -12,6 +12,8 @@ export async function resetClass(env:Env,id:Identity,confirmation:string,action?
   env.DB.prepare("SELECT CASE WHEN changes()=1 THEN 1 ELSE json_extract('invalid-json','$') END"),
  ] : [];
  statements.push(
+  env.DB.prepare('DELETE FROM class_records WHERE class_id=?').bind(classId),
+  env.DB.prepare('DELETE FROM notice_memories WHERE class_id=?').bind(classId),
   env.DB.prepare('DELETE FROM vote_records WHERE vote_id IN (SELECT id FROM votes WHERE class_id=?)').bind(classId),
   env.DB.prepare('DELETE FROM vote_options WHERE vote_id IN (SELECT id FROM votes WHERE class_id=?)').bind(classId),
   env.DB.prepare('DELETE FROM votes WHERE class_id=?').bind(classId),

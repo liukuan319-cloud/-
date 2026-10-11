@@ -16,7 +16,7 @@ class Statement {
 }
 class SqliteD1 {
   db = new DatabaseSync(':memory:')
-  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql','0011_accounts.sql','0012_schedule_detail.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
+  constructor() { for(const file of ['0001_initial.sql','0002_members.sql','0003_join_policy.sql','0004_member_removal.sql','0005_timetable_duty.sql','0006_notice_categories.sql','0007_academics.sql','0008_calendar.sql','0009_votes.sql','0010_reminders.sql','0011_accounts.sql','0012_schedule_detail.sql','0013_class_records.sql']) this.db.exec(readFileSync(new URL('../migrations/'+file, import.meta.url), 'utf8')) }
   prepare(sql: string) { return new Statement(this.db, sql) }
   async batch(statements: Statement[]) { this.db.exec('BEGIN'); try { const result = statements.map(s => s.execute()); this.db.exec('COMMIT'); return result } catch (error) { this.db.exec('ROLLBACK'); throw error } }
 }
@@ -54,6 +54,20 @@ function mockProvider(messages: unknown[]) {
 }
 
 describe('native Banshu tool contract', () => {
+  it('retrieves old published notices, private draft memories, and scoped class records', async () => {
+    db.db.prepare('UPDATE notices SET source_date=? WHERE id=?').run('2025-03-01','notice-1')
+    db.db.prepare('INSERT INTO notice_memories(id,class_id,member_id,content,source_date,created_at) VALUES(?,?,?,?,?,?)').run('memo-1','class-1','admin-1','军训集合在东门','2025-03-01',now)
+    db.db.prepare('INSERT INTO class_records(id,class_id,kind,title,detail,amount_cents,fee_direction,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run('fee-1','class-1','fee','班费支出','购买材料',2500,'expense','admin-1',now)
+    const old = await executeTool(env, realStudent, 'search_notices', { query: '运动会' }) as any
+    expect(old.notices[0].title).toBe('运动会报名通知')
+    const privateResult = await executeTool(env, realStudent, 'search_notice_memory', { query: '军训' }) as any
+    expect(privateResult.answer).not.toContain('东门')
+    const ownResult = await executeTool(env, realAdmin, 'search_notice_memory', { query: '军训' }) as any
+    expect(ownResult.answer).toContain('东门')
+    const fee = await executeTool(env, realStudent, 'get_class_records', { kind: 'fee' }) as any
+    expect(fee.answer).toContain('2500')
+    expect(fee.answer).toContain('班级事务记录')
+  })
   it('enables the real mode with either server-side key name', () => {
     expect(mode({ DB: env.DB, API_KEY: 'test-key' }, realStudent)).toBe('live')
     expect(mode({ DB: env.DB, API_KEY: 'test-key' }, student)).toBe('demo')

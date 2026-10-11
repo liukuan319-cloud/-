@@ -17,6 +17,8 @@ import { memberReminders,reminderRules,saveReminderRules } from './reminders';
 import { activateMember, hashPassword, loginMember, passwordSchema, studentNoSchema, usernameSchema } from './accounts';
 import { addPersonalTask, personalTasks, setPersonalTaskStatus } from './personal-tasks';
 import { resetClass } from './class-reset';
+import { listClassRecords, createClassRecord } from './class-records';
+import { rememberNoticeDraft } from './notice-memory';
 const app=new Hono<AppBindings>();
 app.use('/api/*',async(c,next)=>{
  c.header('Cache-Control','no-store');c.header('X-Content-Type-Options','nosniff');
@@ -54,6 +56,8 @@ app.patch('/api/class/members/:id',async c=>{const id=await identity(c);const b=
 app.delete('/api/class/members/:id',async c=>c.json(await changeMember(c.env,await identity(c),c.req.param('id'),null)));
 app.post('/api/class/members/:id/reset-password',async c=>c.json(await resetMemberPassword(c.env,await identity(c),c.req.param('id'))));
 app.get('/api/members',async c=>{const id=await identity(c);return c.json({members:await members(c.env,id)});});
+app.get('/api/class/records',async c=>{const id=await identity(c);return c.json({records:await listClassRecords(c.env,id,c.req.query('kind'))});});
+app.post('/api/class/records',async c=>c.json(await createClassRecord(c.env,await identity(c),await json(c))));
 app.get('/api/class/schedule',async c=>{const id=await identity(c);return c.json(await getSchedule(c.env,id));});
 app.put('/api/class/schedule',async c=>{const id=await identity(c);return c.json(await replaceSchedule(c.env,id,await json(c)));});
 app.post('/api/class/schedule/import',async c=>{const id=await identity(c);return c.json(await importSchedule(c.env,id,await json(c)));});
@@ -111,6 +115,7 @@ app.post('/api/chat',async c=>{
    const time=now(),assistantId=uuid();await c.env.DB.batch([
     c.env.DB.prepare('INSERT INTO messages(id,member_id,role,content,cards,created_at) VALUES(?,?,?,?,?,?)').bind(uuid(),id.user.id,'user',b.message,'[]',time),
     c.env.DB.prepare('INSERT INTO messages(id,member_id,role,content,cards,created_at) VALUES(?,?,?,?,?,?)').bind(assistantId,id.user.id,'assistant',result.content,JSON.stringify(result.cards),new Date(Date.now()+1).toISOString())]);
+   if(result.cards.some(card=>card.type==='action'&&card.action.type==='publish_notice'))await rememberNoticeDraft(c.env,id,b.message,b.sourceDate||beijingDate());
    await stream.writeSSE({event:'result',data:JSON.stringify({message:{id:assistantId,role:'assistant',content:result.content,cards:result.cards,createdAt:time}})});
   }catch(err){const message=abort.signal.aborted?'AI 响应超时，请重试；未经确认的操作不会执行。':err instanceof HTTPException?err.message:'AI 处理失败，请稍后重试。';await stream.writeSSE({event:'error',data:JSON.stringify({error:message})});}finally{clearTimeout(timer);}
  });
