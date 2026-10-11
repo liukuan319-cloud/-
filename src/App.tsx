@@ -61,6 +61,7 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
+  const [offline, setOffline] = useState(!navigator.onLine)
   const [selectedNotice, setSelectedNotice] = useState<Notice | null>(null)
   const [pending, setPending] = useState<Action | null>(null)
   const [transferredDraft, setTransferredDraft] = useState<Draft | null>(null)
@@ -70,6 +71,12 @@ export default function App() {
   identityRef.current = session?.user.id
 
   useEffect(() => { api<Session>('/session').then(value => setSession(value)).catch(() => {}).finally(() => setBooting(false)) }, [])
+  useEffect(() => {
+    const update = () => setOffline(!navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) }
+  }, [])
   useEffect(() => {
     if (!session) return
     void refresh(true)
@@ -107,7 +114,7 @@ export default function App() {
     else if (item === '提醒' || item === '站内提醒') navigate('reminders', item)
     else if (item === '班级设置' || item === '班级概览' || item === '成员名单') navigate('settings', item)
   }
-  async function logout() { try { await api('/session', { method: 'DELETE' }); setSession(null); setTasks([]); setNotices([]) } catch (e) { setError((e as Error).message) } }
+  async function logout() { try { await api('/session', { method: 'DELETE' }); setSession(null); setTasks([]); setNotices([]) } catch (e) { setError(offline ? '离线时无法安全退出，请联网后再试。' : (e as Error).message) } }
   async function prepareTask(task: Task) {
     try {
       const latest = await api<{ tasks: Task[] }>('/tasks')
@@ -133,6 +140,7 @@ export default function App() {
   if (!session) return <AuthPage onSignIn={signedIn} />
   const navigation = primaryNav.map(group => 'items' in group ? { ...group, items: group.items.filter(item => session.classroom.isDemo ? !['班级设置','站内提醒','提醒','设置与安全'].includes(item) : (item !== '班级设置' || session.user.accessRole === 'faculty') && (item !== '成员名单' || session.user.accessRole !== 'student')) } : group).filter(group => !session.classroom.isDemo || group.name !== '更多')
   return <div className="app-shell">
+    {offline && <div className="offline-banner" role="status"><span className="green-dot" />当前离线：显示已缓存的班级数据，AI 问答和提交操作需要联网。</div>}
     <header className="site-header"><div className="topbar"><button className="brand-button" onClick={() => navigate('ai', '首页')} aria-label="返回首页"><Brand /></button><nav className="desktop-navigation" aria-label="主导航">{navigation.map(group => <div className={`nav-group ${page === group.id || (group.name === '更多' && page === 'admin') ? 'active' : ''}`} key={group.name}><button onClick={() => navigate(group.id, group.name)}>{group.name}{'items' in group && <ChevronDown size={14} />}</button>{'items' in group && <div className="nav-dropdown">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.accessRole !== 'student' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav><div className="topbar-right"><span className="class-name">{session.classroom.name}{session.classroom.isDemo && " · 只读演示"}</span>{session.classroom.isDemo && <button className="demo-exit" onClick={logout}><LogOut size={15}/>退出演示</button>}<button className="header-alert icon-btn" aria-label="查看提醒" onClick={() => navigate('reminders', '提醒')}><Bell size={19} />{reminderCount>0&&<span className="notification-badge">{Math.min(reminderCount,9)}</span>}</button><button className="profile-trigger" onClick={() => navigate('settings', '我的班级')} aria-label="我的班级"><span className="avatar">{session.user.nickname.slice(-2)}</span><span>{session.user.nickname}</span></button><button className="menu-trigger icon-btn" aria-label={drawerOpen ? '关闭导航' : '打开导航'} aria-expanded={drawerOpen} onClick={() => setDrawerOpen(!drawerOpen)}>{drawerOpen ? <X size={23} /> : <Menu size={23} />}</button></div></div></header>
     {drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)}><nav className="mobile-drawer" aria-label="手机导航" onClick={e => e.stopPropagation()}><div className="drawer-heading"><span>{session.classroom.name}</span><button className="icon-btn" onClick={() => setDrawerOpen(false)} aria-label="关闭导航"><X size={20} /></button></div>{navigation.map(group => <div className="drawer-group" key={group.name}><button className="drawer-primary" onClick={() => navigate(group.id, group.name)}>{group.name}<ChevronRight size={17} /></button>{'items' in group && <div className="drawer-items">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.accessRole !== 'student' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav></div>}
     <div className="main-shell">{page !== 'ai' && <div className="breadcrumb"><button onClick={() => navigate('ai', '首页')}>首页</button><ChevronRight size={15} /><span>{section}</span></div>}
