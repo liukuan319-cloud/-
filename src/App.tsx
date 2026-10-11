@@ -9,13 +9,14 @@ import { AuthPage } from './AuthPage'
 import { AccountSettings } from './AccountSettings'
 import { PersonalTasks } from './PersonalTasks'
 import { ClassRecordsPage } from './ClassRecordsPage'
+import { SecurityPage } from './SecurityPage'
 
-type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'academics' | 'calendar' | 'votes' | 'reminders' | 'records'
+type Page = 'ai' | 'tasks' | 'notices' | 'admin' | 'settings' | 'security' | 'academics' | 'calendar' | 'votes' | 'reminders' | 'records'
 const primaryNav = [
   { id: 'ai' as const, name: '首页' },
   { id: 'notices' as const, name: '通知', items: ['全部', '重要公告', '组队通知', '考证考试', '活动报名', '日常事务'] },
   { id: 'academics' as const, name: '学业', items: ['学业概览', '课程表', '考试安排'] },
-  { id: 'settings' as const, name: '班级', items: ['班级概览', '事务记录', '日历', '投票', '提醒', '成员名单', '班级设置'] },
+  { id: 'settings' as const, name: '班级', items: ['班级概览', '事务记录', '日历', '投票', '提醒', '成员名单', '班级设置', '设置与安全'] },
   { id: 'tasks' as const, name: '更多', items: ['我的待办', '站内提醒', '班级设置'] },
 ] as const
 const uid = () => crypto.randomUUID()
@@ -102,6 +103,7 @@ export default function App() {
     else if (item === '日历') navigate('calendar', item)
     else if (item === '事务记录') navigate('records', item)
     else if (item === '投票') navigate('votes', item)
+    else if (item === '设置与安全') navigate('security', item)
     else if (item === '提醒' || item === '站内提醒') navigate('reminders', item)
     else if (item === '班级设置' || item === '班级概览' || item === '成员名单') navigate('settings', item)
   }
@@ -129,7 +131,7 @@ export default function App() {
   const completed = tasks.length - remaining
   if (booting) return <div className="boot"><Brand /><LoaderCircle className="spin" /><span>正在准备你的班级空间…</span></div>
   if (!session) return <AuthPage onSignIn={signedIn} />
-  const navigation = primaryNav.map(group => 'items' in group ? { ...group, items: group.items.filter(item => session.classroom.isDemo ? !['班级设置','站内提醒','提醒'].includes(item) : (item !== '班级设置' || session.user.accessRole === 'faculty') && (item !== '成员名单' || session.user.accessRole !== 'student')) } : group).filter(group => !session.classroom.isDemo || group.name !== '更多')
+  const navigation = primaryNav.map(group => 'items' in group ? { ...group, items: group.items.filter(item => session.classroom.isDemo ? !['班级设置','站内提醒','提醒','设置与安全'].includes(item) : (item !== '班级设置' || session.user.accessRole === 'faculty') && (item !== '成员名单' || session.user.accessRole !== 'student')) } : group).filter(group => !session.classroom.isDemo || group.name !== '更多')
   return <div className="app-shell">
     <header className="site-header"><div className="topbar"><button className="brand-button" onClick={() => navigate('ai', '首页')} aria-label="返回首页"><Brand /></button><nav className="desktop-navigation" aria-label="主导航">{navigation.map(group => <div className={`nav-group ${page === group.id || (group.name === '更多' && page === 'admin') ? 'active' : ''}`} key={group.name}><button onClick={() => navigate(group.id, group.name)}>{group.name}{'items' in group && <ChevronDown size={14} />}</button>{'items' in group && <div className="nav-dropdown">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.accessRole !== 'student' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav><div className="topbar-right"><span className="class-name">{session.classroom.name}{session.classroom.isDemo && " · 只读演示"}</span>{session.classroom.isDemo && <button className="demo-exit" onClick={logout}><LogOut size={15}/>退出演示</button>}<button className="header-alert icon-btn" aria-label="查看提醒" onClick={() => navigate('reminders', '提醒')}><Bell size={19} />{reminderCount>0&&<span className="notification-badge">{Math.min(reminderCount,9)}</span>}</button><button className="profile-trigger" onClick={() => navigate('settings', '我的班级')} aria-label="我的班级"><span className="avatar">{session.user.nickname.slice(-2)}</span><span>{session.user.nickname}</span></button><button className="menu-trigger icon-btn" aria-label={drawerOpen ? '关闭导航' : '打开导航'} aria-expanded={drawerOpen} onClick={() => setDrawerOpen(!drawerOpen)}>{drawerOpen ? <X size={23} /> : <Menu size={23} />}</button></div></div></header>
     {drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)}><nav className="mobile-drawer" aria-label="手机导航" onClick={e => e.stopPropagation()}><div className="drawer-heading"><span>{session.classroom.name}</span><button className="icon-btn" onClick={() => setDrawerOpen(false)} aria-label="关闭导航"><X size={20} /></button></div>{navigation.map(group => <div className="drawer-group" key={group.name}><button className="drawer-primary" onClick={() => navigate(group.id, group.name)}>{group.name}<ChevronRight size={17} /></button>{'items' in group && <div className="drawer-items">{group.items.map(item => <button key={item} onClick={() => navigateItem(group.name, item)}>{item}</button>)}{group.name === '更多' && session.user.accessRole !== 'student' && <button onClick={() => navigate('admin', '发布与统计')}>发布与统计</button>}</div>}</div>)}</nav></div>}
@@ -141,6 +143,7 @@ export default function App() {
         {page === 'academics' && <AcademicsPage session={session} onError={setError} />}
         {page === 'calendar' && <CalendarPage session={session} onError={setError} />}
         {page === 'records' && <ClassRecordsPage session={session} onError={setError} />}
+        {page === 'security' && !session.classroom.isDemo && <SecurityPage session={session} />}
         {page === 'votes' && <VotesPage session={session} onError={setError} />}
         {page === 'reminders' && <RemindersPage session={session} onError={setError} />}
         {page === 'notices' && <NoticesPage notices={notices} loading={loading} category={noticeCategory} memberId={session.user.id} onNotice={setSelectedNotice} />}

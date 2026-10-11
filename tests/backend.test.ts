@@ -62,6 +62,27 @@ describe('structured class records', () => {
   })
 })
 
+describe('security audit view', () => {
+  it('limits the read-only paginated audit log to the current class faculty', async () => {
+    const owner = await signup(), student = await join(owner), other = await signup('其他班级')
+    expect((await request('/security/audit', 'GET', undefined, student.cookie)).status).toBe(403)
+    expect((await request('/security/audit', 'GET', undefined)).status).toBe(401)
+    for (let index = 0; index < 22; index++) db.db.prepare('INSERT INTO audit_log(id,class_id,member_id,action,target_id,created_at) VALUES(?,?,?,?,?,?)')
+      .run(crypto.randomUUID(),owner.classroom.id,student.user.id,'login',student.user.id,new Date(Date.UTC(2026,9,11,0,index)).toISOString())
+    const first = await (await request('/security/audit?page=1','GET',undefined,owner.cookie)).json() as any
+    const second = await (await request('/security/audit?page=2','GET',undefined,owner.cookie)).json() as any
+    expect(first.total).toBe(25)
+    expect(first.entries).toHaveLength(20)
+    expect(second.entries).toHaveLength(5)
+    expect(first.entries[0]).toMatchObject({actorName:student.user.nickname,actorRole:'学生',description:'激活成员账号'})
+    expect(first.entries[0].createdAt > first.entries[1].createdAt).toBe(true)
+    expect(JSON.stringify(first)).not.toContain('student_no')
+    const foreign = await (await request('/security/audit','GET',undefined,other.cookie)).json() as any
+    expect(foreign.total).toBe(1)
+    expect((await request('/security/audit?page=0','GET',undefined,owner.cookie)).status).toBe(400)
+  })
+})
+
 describe('class creation access', () => {
   const body = { name: '测试班级', nickname: '辅导员', username: 'faculty_test', password: 'Banshu2026' }
   it('requires the team secret before creating any records', async () => {
@@ -322,7 +343,7 @@ describe('business permissions and confirmations', () => {
     expect(responses.map(r => r.status)).toEqual([200, 200])
     const values = await Promise.all(responses.map(r => r.json()))
     expect(values[0]).toEqual(values[1]); expect(db.db.prepare('SELECT count(*) AS count FROM notices').get()!.count).toBe(1)
-    expect(db.db.prepare('SELECT count(*) AS count FROM audit_log').get()!.count).toBe(1)
+    expect(db.db.prepare("SELECT count(*) AS count FROM audit_log WHERE action='publish_notice'").get()!.count).toBe(1)
   })
   it('allows editing a prepared draft during explicit confirmation', async () => { const owner = await signup(); const action = await prepare(owner); const response = await request(`/actions/${action.id}/confirm`, 'POST', { draft: draft({ title: '已核实的运动会报名' }) }, owner.cookie); expect(response.status).toBe(200); expect(db.db.prepare('SELECT title FROM notices').get()!.title).toBe('已核实的运动会报名') })
   it('does not allow students to publish, list members, inspect progress, or rotate invites', async () => { const owner = await signup(); const student = await join(owner); await publish(owner); const task = (await getTasks(student))[0]; expect((await request('/drafts', 'POST', draft(), student.cookie)).status).toBe(403); expect((await request('/members', 'GET', undefined, student.cookie)).status).toBe(403); expect((await request(`/tasks/${task.id}/progress`, 'GET', undefined, student.cookie)).status).toBe(403); expect((await request('/invite/rotate', 'POST', {}, student.cookie)).status).toBe(403); expect((await request('/admin/tasks', 'GET', undefined, student.cookie)).status).toBe(403) })
