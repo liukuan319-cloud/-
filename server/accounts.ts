@@ -29,7 +29,7 @@ export async function verifyPassword(password: string, encoded: string | null) {
 
 export async function loginMember(env: Env, account: string, password: string) {
   const normalized = account.trim().toLowerCase();
-  const member = await env.DB.prepare('SELECT id,password_hash,password_active,failed_attempts,locked_until FROM members WHERE deleted_at IS NULL AND (student_no=? OR username=?)').bind(normalized, normalized).all<{id:string;password_hash:string|null;password_active:number;failed_attempts:number;locked_until:string|null}>();
+  const member = await env.DB.prepare('SELECT m.id,m.password_hash,m.password_active,m.failed_attempts,m.locked_until FROM members m JOIN classes c ON c.id=m.class_id WHERE c.is_demo=0 AND m.deleted_at IS NULL AND (m.student_no=? OR m.username=?)').bind(normalized, normalized).all<{id:string;password_hash:string|null;password_active:number;failed_attempts:number;locked_until:string|null}>();
   if (member.results.length !== 1) throw new HTTPException(401, { message: '账号或密码不正确。' });
   const accountRow = member.results[0];
   if (accountRow.locked_until && accountRow.locked_until > now()) throw new HTTPException(429, { message: '错误次数过多，请10分钟后重试。' });
@@ -44,7 +44,7 @@ export async function loginMember(env: Env, account: string, password: string) {
 }
 
 export async function activateMember(env: Env, studentNo: string, inviteCode: string, password: string) {
-  const matches = await env.DB.prepare('SELECT m.id,m.password_active FROM members m JOIN classes c ON c.id=m.class_id WHERE m.student_no=? AND c.invite_code=? AND m.deleted_at IS NULL').bind(studentNo, inviteCode.trim().toUpperCase()).all<{id:string;password_active:number}>();
+  const matches = await env.DB.prepare('SELECT m.id,m.password_active FROM members m JOIN classes c ON c.id=m.class_id WHERE c.is_demo=0 AND m.student_no=? AND c.invite_code=? AND m.deleted_at IS NULL').bind(studentNo, inviteCode.trim().toUpperCase()).all<{id:string;password_active:number}>();
   if (matches.results.length !== 1) throw new HTTPException(403, { message: '学号或邀请码不正确。' });
   const member = matches.results[0];
   if (member.password_active) throw new HTTPException(409, { message: '该账号已激活，请用学号和密码登录。' });

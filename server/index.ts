@@ -3,7 +3,7 @@ import { streamSSE } from 'hono/streaming';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import type { AppBindings } from './types';
-import { uuid,now,hash,secret,session,logout,identity,limit,mode,admin,faculty } from './auth';
+import { uuid,now,hash,secret,session,logout,identity,limit,mode,admin,faculty,guestSession,isGuestRequest } from './auth';
 import { nicknameSchema,dateSchema,calendar,beijingDate } from './validation';
 import { tasks,notices,notice,noticeCategories,members,validateDraft,makeAction,prepareStatus,progress,confirmAction,editNotice,adminTasks } from './business';
 import { demoChat,banshuChat,liveChat } from './ai';
@@ -29,11 +29,18 @@ app.use('/api/*',async(c,next)=>{
  }
  await next();
 });
+app.use('/api/*',async(c,next)=>{
+ if(['POST','PUT','PATCH','DELETE'].includes(c.req.method) && !((c.req.method==='POST' && ['/api/chat','/api/demo/session'].includes(new URL(c.req.url).pathname)) || (c.req.method==='DELETE' && new URL(c.req.url).pathname==='/api/session'))){
+  if(await isGuestRequest(c))throw new HTTPException(403,{message:'演示模式仅支持查看和问答，请登录后使用完整功能。'});
+ }
+ await next();
+});
 app.onError((err,c)=>{if(err instanceof z.ZodError)return c.json({error:err.issues.map(i=>i.message).join('；')},400);if(err instanceof HTTPException)return c.json({error:err.message},{status:err.status});console.error('Request failed',err.name);return c.json({error:'服务器暂时不可用，请稍后重试。'},{status:500});});
 const json=async(c:any)=>{try{return await c.req.json();}catch{throw new HTTPException(400,{message:'请求格式不正确。'});}};
 const sameSecret=async(a:string,b:string)=>{const encoder=new TextEncoder();const [left,right]=await Promise.all([crypto.subtle.digest('SHA-256',encoder.encode(a)),crypto.subtle.digest('SHA-256',encoder.encode(b))]);const x=new Uint8Array(left),y=new Uint8Array(right);let diff=0;for(let i=0;i<x.length;i++)diff|=x[i]^y[i];return diff===0;};
 app.get('/api/health',c=>c.json({ok:true}));
 app.get('/api/session',async c=>{const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
+app.post('/api/demo/session',async c=>{await limit(c.env,'guest-open-ip:'+(c.req.header('CF-Connecting-IP')||'local'),30,3600);await guestSession(c);const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
 app.post('/api/login',async c=>{await limit(c.env,'login-ip:'+(c.req.header('CF-Connecting-IP')||'local'),40,600);const b=z.object({account:z.string().trim().min(1).max(64),password:z.string().min(1).max(100)}).strict().parse(await json(c));await session(c,await loginMember(c.env,b.account,b.password));const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
 app.post('/api/activate',async c=>{await limit(c.env,'activate-ip:'+(c.req.header('CF-Connecting-IP')||'local'),20,600);const b=z.object({studentNo:studentNoSchema,inviteCode:z.string().trim().min(4).max(20),password:passwordSchema,confirmPassword:z.string()}).strict().refine(v=>v.password===v.confirmPassword,'两次密码不一致').parse(await json(c));await session(c,await activateMember(c.env,b.studentNo,b.inviteCode,b.password));const id=await identity(c);return c.json({user:id.user,classroom:id.classroom,mode:mode(c.env,id)});});
 app.post('/api/demo',()=>{throw new HTTPException(403,{message:'示例班级已关闭。'});});
@@ -55,7 +62,7 @@ app.post('/api/class/reset',async c=>{const id=await identity(c);const b=z.objec
 app.patch('/api/class/members/:id',async c=>{const id=await identity(c);const b=z.object({role:z.enum(['cadre','student'])}).strict().parse(await json(c));return c.json(await changeMember(c.env,id,c.req.param('id'),b.role==='cadre'?'admin':'student'));});
 app.delete('/api/class/members/:id',async c=>c.json(await changeMember(c.env,await identity(c),c.req.param('id'),null)));
 app.post('/api/class/members/:id/reset-password',async c=>c.json(await resetMemberPassword(c.env,await identity(c),c.req.param('id'))));
-app.get('/api/members',async c=>{const id=await identity(c);return c.json({members:await members(c.env,id)});});
+app.get('/api/members',async c=>{const id=await identity(c);if(id.classroom.isDemo){const r=await c.env.DB.prepare('SELECT id,nickname,access_role AS role FROM members WHERE class_id=? AND deleted_at IS NULL ORDER BY created_at,id').bind(id.user.classId).all();return c.json({members:r.results});}return c.json({members:await members(c.env,id)});});
 app.get('/api/class/records',async c=>{const id=await identity(c);return c.json({records:await listClassRecords(c.env,id,c.req.query('kind'))});});
 app.post('/api/class/records',async c=>c.json(await createClassRecord(c.env,await identity(c),await json(c))));
 app.get('/api/class/schedule',async c=>{const id=await identity(c);return c.json(await getSchedule(c.env,id));});
@@ -78,7 +85,7 @@ app.get('/api/votes',async c=>c.json({votes:await listVotes(c.env,await identity
 app.post('/api/votes',async c=>c.json(await createVote(c.env,await identity(c),await json(c))));
 app.post('/api/votes/:id/cast',async c=>c.json(await castVote(c.env,await identity(c),c.req.param('id'),await json(c))));
 app.post('/api/votes/:id/end',async c=>c.json(await endVote(c.env,await identity(c),c.req.param('id'))));
-app.get('/api/reminders',async c=>c.json({reminders:await memberReminders(c.env,await identity(c))}));
+app.get('/api/reminders',async c=>{const id=await identity(c);return c.json({reminders:id.guestSessionHash?[]:await memberReminders(c.env,id)});});
 app.get('/api/reminders/rules',async c=>c.json({rules:await reminderRules(c.env,await identity(c))}));
 app.put('/api/reminders/rules',async c=>c.json({rules:await saveReminderRules(c.env,await identity(c),await json(c))}));
 app.get('/api/tasks/:id/progress',async c=>{const id=await identity(c);return c.json(await progress(c.env,id,c.req.param('id')));});
@@ -87,14 +94,14 @@ app.post('/api/actions',async c=>{const id=await identity(c),b=await json(c);ret
 app.post('/api/actions/:id/confirm',async c=>{const id=await identity(c),b=await json(c);return c.json({result:await confirmAction(c.env,id,c.req.param('id'),b?.draft)});});
 app.post('/api/drafts',async c=>{const id=await identity(c),draft=await validateDraft(c.env,id,await json(c));return c.json({action:await makeAction(c.env,id,'publish_notice',draft)});});
 app.patch('/api/notices/:id',async c=>{const id=await identity(c);return c.json({notice:await editNotice(c.env,id,c.req.param('id'),await json(c))});});app.delete('/api/notices/:id',async c=>{const id=await identity(c);return c.json({notice:await editNotice(c.env,id,c.req.param('id'),await json(c),true)});});
-app.get('/api/chat',async c=>{const id=await identity(c);const r=await c.env.DB.prepare('SELECT id,role,content,cards,created_at AS createdAt FROM messages WHERE member_id=? ORDER BY created_at,id').bind(id.user.id).all<any>();return c.json({messages:r.results.map(m=>({...m,cards:JSON.parse(m.cards||'[]')}))});});
+app.get('/api/chat',async c=>{const id=await identity(c);const r=id.guestSessionHash?await c.env.DB.prepare('SELECT id,role,content,cards,created_at AS createdAt FROM guest_messages WHERE session_hash=? ORDER BY created_at,id').bind(id.guestSessionHash).all<any>():await c.env.DB.prepare('SELECT id,role,content,cards,created_at AS createdAt FROM messages WHERE member_id=? ORDER BY created_at,id').bind(id.user.id).all<any>();return c.json({messages:r.results.map(m=>({...m,cards:JSON.parse(m.cards||'[]')}))});});
 app.delete('/api/chat',async c=>{const id=await identity(c);await c.env.DB.prepare('DELETE FROM messages WHERE member_id=?').bind(id.user.id).run();return c.json({ok:true});});
 app.post('/api/chat',async c=>{
- const id=await identity(c);await limit(c.env,'chat:'+id.user.id,15,60);await limit(c.env,'chat-day:'+id.user.id,100,86400);
+ const id=await identity(c);await limit(c.env,'chat:'+(id.guestSessionHash||id.user.id),15,60);await limit(c.env,'chat-day:'+(id.guestSessionHash||id.user.id),100,86400);if(id.classroom.isDemo)await limit(c.env,'guest-chat-ip:'+(c.req.header('CF-Connecting-IP')||'local'),30,3600);
  const raw=await json(c);const b=z.object({message:z.string().trim().min(1).max(12000),sourceDate:dateSchema.optional(),history:z.unknown().optional(),data:z.unknown().optional()}).parse(raw);const currentMode=mode(c.env,id);
  if(currentMode==='unconfigured')throw new HTTPException(503,{message:'当前班级尚未配置 AI 服务。你仍可手动发布通知、查看待办。'});
  if('history' in raw || 'data' in raw){
-  if(currentMode==='demo')throw new HTTPException(503,{message:'示例班级仅支持网页演示模式。'});
+  if(id.classroom.isDemo)throw new HTTPException(403,{message:'演示空间只支持网页问答。'});
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),45000);
   try{
    const context=await loadBanshuContext(c.env,id);
@@ -108,11 +115,13 @@ app.post('/api/chat',async c=>{
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),45000);stream.onAbort(()=>abort.abort());
   try{
    const report=async(message:string)=>{await stream.writeSSE({event:'status',data:JSON.stringify({message})});};
-   await report(currentMode==='demo'?'正在使用示例规则查询…':'正在连接 AI…');
+   await report('正在连接 AI…');
    let result;
-   if(currentMode==='demo')result=await demoChat(c.env,id,b.message,b.sourceDate);
-   else result=await liveChat(c.env,id,b.message,b.sourceDate,report,abort.signal);
-   const time=now(),assistantId=uuid();await c.env.DB.batch([
+   result=await liveChat(c.env,id,b.message,b.sourceDate,report,abort.signal);
+   const time=now(),assistantId=uuid();await c.env.DB.batch(id.guestSessionHash?[
+    c.env.DB.prepare('INSERT INTO guest_messages(id,session_hash,role,content,cards,created_at) VALUES(?,?,?,?,?,?)').bind(uuid(),id.guestSessionHash,'user',b.message,'[]',time),
+    c.env.DB.prepare('INSERT INTO guest_messages(id,session_hash,role,content,cards,created_at) VALUES(?,?,?,?,?,?)').bind(assistantId,id.guestSessionHash,'assistant',result.content,JSON.stringify(result.cards),new Date(Date.now()+1).toISOString())
+   ]:[
     c.env.DB.prepare('INSERT INTO messages(id,member_id,role,content,cards,created_at) VALUES(?,?,?,?,?,?)').bind(uuid(),id.user.id,'user',b.message,'[]',time),
     c.env.DB.prepare('INSERT INTO messages(id,member_id,role,content,cards,created_at) VALUES(?,?,?,?,?,?)').bind(assistantId,id.user.id,'assistant',result.content,JSON.stringify(result.cards),new Date(Date.now()+1).toISOString())]);
    if(result.cards.some(card=>card.type==='action'&&card.action.type==='publish_notice'))await rememberNoticeDraft(c.env,id,b.message,b.sourceDate||beijingDate());

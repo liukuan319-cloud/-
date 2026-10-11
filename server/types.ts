@@ -2,7 +2,7 @@ export interface Env { DB: D1Database; ASSETS?: Fetcher; CREATE_CLASS_KEY?: stri
 export type Role = 'faculty' | 'cadre' | 'student';
 export interface User { id: string; classId: string; nickname: string; role: 'admin'|'student'; accessRole?: Role }
 export interface Classroom { id: string; name: string; inviteCode?: string; allowSelfJoin?: boolean; isDemo: boolean }
-export interface Identity { user: User; classroom: Classroom }
+export interface Identity { user: User; classroom: Classroom; guestSessionHash?: string }
 export interface Task { id: string; noticeId: string; title: string; description: string; dueAt: string|null; status: 'pending'|'completed'; version: number; noticeTitle: string; audience: 'all'|'selected' }
 export interface ClassRecord { id: string; kind: 'assignment'|'fee'|'activity'|'shift'; title: string; detail: string; eventAt: string|null; dueAt: string|null; amountCents: number|null; createdAt: string }
 export interface Notice { id: string; title: string; content: string; sourceDate: string; sourceTime: string|null; categoryId: string; categoryName: string; categoryColor: string; priority: 'normal'|'high'; pinned: boolean; createdAt: string; updatedAt: string; version: number; status: string; authorName: string }

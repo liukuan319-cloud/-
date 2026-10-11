@@ -14,16 +14,34 @@ export async function limit(env:Env,key:string,max:number,seconds=60){
  await env.DB.prepare('DELETE FROM rate_limits WHERE key IN (SELECT key FROM rate_limits WHERE expires_at < ? LIMIT 30)').bind(Math.floor(Date.now()/1000)-3600).run();
 }
 export async function session(c:Context<AppBindings>,memberId:string){
+ const guest=getCookie(c,'class_guest');if(guest){const key=await hash(guest);await c.env.DB.prepare('DELETE FROM guest_messages WHERE session_hash=?').bind(key).run();await c.env.DB.prepare('DELETE FROM guest_sessions WHERE token_hash=?').bind(key).run();deleteCookie(c,'class_guest',{path:'/'});}
  const token=secret(),expires=new Date(Date.now()+30*86400000).toISOString();
  await c.env.DB.prepare('INSERT INTO sessions(token_hash,member_id,expires_at) VALUES(?,?,?)').bind(await hash(token),memberId,expires).run();
  setCookie(c,'class_session',token,{httpOnly:true,secure:new URL(c.req.url).protocol==='https:',sameSite:'Strict',path:'/',maxAge:30*86400});
  c.set('identity',await identityForMember(c.env,memberId));
 }
-export async function logout(c:Context<AppBindings>){const token=getCookie(c,'class_session');if(token)await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(await hash(token)).run();deleteCookie(c,'class_session',{path:'/'});}
+export async function logout(c:Context<AppBindings>){const token=getCookie(c,'class_session');if(token)await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(await hash(token)).run();deleteCookie(c,'class_session',{path:'/'});const guest=getCookie(c,'class_guest');if(guest){const key=await hash(guest);await c.env.DB.prepare('DELETE FROM guest_messages WHERE session_hash=?').bind(key).run();await c.env.DB.prepare('DELETE FROM guest_sessions WHERE token_hash=?').bind(key).run();}deleteCookie(c,'class_guest',{path:'/'});}
+export async function guestSession(c:Context<AppBindings>){
+ const token=secret(), expires=new Date(Date.now()+2*3600000).toISOString();
+ await c.env.DB.prepare('INSERT INTO guest_sessions(token_hash,class_id,expires_at) VALUES(?,?,?)').bind(await hash(token),'demo-class-v1',expires).run();
+ setCookie(c,'class_guest',token,{httpOnly:true,secure:new URL(c.req.url).protocol==='https:',sameSite:'Strict',path:'/',maxAge:2*3600});
+ c.set('identity',{user:{id:'demo-guest',classId:'demo-class-v1',nickname:'访客',role:'student',accessRole:'student'},classroom:{id:'demo-class-v1',name:'演示班级',isDemo:true},guestSessionHash:await hash(token)});
+}
+export async function isGuestRequest(c:Context<AppBindings>){
+ const token=getCookie(c,'class_guest'); if(!token)return false;
+ const row=await c.env.DB.prepare("SELECT 1 AS ok FROM guest_sessions WHERE token_hash=? AND expires_at>? AND class_id='demo-class-v1'").bind(await hash(token),now()).first();
+ return !!row;
+}
+export function guestReadOnly(id:Identity){if(id.classroom.isDemo)throw new HTTPException(403,{message:'演示模式仅支持查看和问答，请登录后使用完整功能。'});}
 export async function identity(c:Context<AppBindings>):Promise<Identity>{
  const cached=c.get('identity');if(cached)return cached;
+ const guest=getCookie(c,'class_guest');
+ if(guest){
+  const row=await c.env.DB.prepare("SELECT c.id AS class_id,c.name,c.is_demo,c.invite_code FROM guest_sessions s JOIN classes c ON c.id=s.class_id WHERE s.token_hash=? AND s.expires_at>? AND c.is_demo=1").bind(await hash(guest),now()).first<any>();
+  if(row)return {user:{id:'demo-guest',classId:row.class_id,nickname:'访客',role:'student',accessRole:'student'},classroom:{id:row.class_id,name:row.name,isDemo:true},guestSessionHash:await hash(guest)};
+ }
  const token=getCookie(c,'class_session');if(!token)throw new HTTPException(401,{message:'请先加入班级。'});
- const row=await c.env.DB.prepare(`SELECT m.id,m.class_id,m.nickname,m.role,m.access_role,c.name,c.invite_code,c.is_demo,c.allow_self_join FROM sessions s JOIN members m ON m.id=s.member_id JOIN classes c ON c.id=m.class_id WHERE m.deleted_at IS NULL AND s.token_hash=? AND s.expires_at>?`).bind(await hash(token),now()).first<any>();
+ const row=await c.env.DB.prepare(`SELECT m.id,m.class_id,m.nickname,m.role,m.access_role,c.name,c.invite_code,c.is_demo,c.allow_self_join FROM sessions s JOIN members m ON m.id=s.member_id JOIN classes c ON c.id=m.class_id WHERE c.is_demo=0 AND m.deleted_at IS NULL AND s.token_hash=? AND s.expires_at>?`).bind(await hash(token),now()).first<any>();
  if(!row)throw new HTTPException(401,{message:'登录已失效，请使用姓名或学号及班级邀请码重新登录。'});
  return {user:{id:row.id,classId:row.class_id,nickname:row.nickname,role:row.role,accessRole:row.access_role},classroom:{id:row.class_id,name:row.name,isDemo:!!row.is_demo,...(row.access_role==='faculty'?{inviteCode:row.invite_code,allowSelfJoin:!!row.allow_self_join}:{})}};
 }
@@ -34,4 +52,4 @@ export async function identityForMember(env:Env,memberId:string):Promise<Identit
 }
 export function admin(id:Identity){if((id.user.accessRole || (id.user.role==='admin'?'cadre':'student'))==='student')throw new HTTPException(403,{message:'此操作仅限辅导员或班干部。'});}
 export function faculty(id:Identity){if(id.user.accessRole!=='faculty')throw new HTTPException(403,{message:'此操作仅限辅导员。'});}
-export function mode(env:Env,id:Identity){return id.classroom.isDemo?'demo':(env.AI_API_KEY||env.API_KEY)?'live':'unconfigured';}
+export function mode(env:Env,id:Identity){return id.classroom.isDemo&&!id.guestSessionHash?'demo':(env.AI_API_KEY||env.API_KEY)?'live':'unconfigured';}
