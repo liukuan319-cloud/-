@@ -70,7 +70,7 @@ export async function executeTool(env: Env, id: Identity, name: string, args: un
       const input = z.object({ kind: recordKind.optional(), query: z.string().trim().max(200).default('') }).strict().parse(args);
       const rows = await listClassRecords(env, id, input.kind);
       const matches = rows.filter((row: any) => !input.query || (row.title + row.detail).toLowerCase().includes(input.query.toLowerCase())).slice(0, 20);
-      return { answer: matches.length ? JSON.stringify(matches.map((row: any) => ({ ...row, source: '班级事务记录' }))) : '暂无符合条件的班级事务记录，可联系班干部录入。' };
+      return { answer: matches.length ? JSON.stringify(matches.map((row: any) => ({ kind: row.kind, title: row.title, detail: row.detail, eventAt: row.eventAt, dueAt: row.dueAt, ...(row.kind === 'fee' ? { direction: row.feeDirection === 'income' ? '收入' : '支出', amountYuan: (row.amountCents / 100).toFixed(2) } : {}), source: '班级事务记录' }))) : '暂无符合条件的班级事务记录，可联系班干部录入。' };
     }
     case 'get_notice_detail': {
       const { noticeId } = noticeIdSchema.parse(args), found = await notice(env, id, noticeId);

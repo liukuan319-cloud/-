@@ -65,7 +65,8 @@ describe('native Banshu tool contract', () => {
     const ownResult = await executeTool(env, realAdmin, 'search_notice_memory', { query: '军训' }) as any
     expect(ownResult.answer).toContain('东门')
     const fee = await executeTool(env, realStudent, 'get_class_records', { kind: 'fee' }) as any
-    expect(fee.answer).toContain('2500')
+    expect(fee.answer).toContain('"amountYuan":"25.00"')
+    expect(fee.answer).toContain('"direction":"支出"')
     expect(fee.answer).toContain('班级事务记录')
   })
   it('enables the real mode with either server-side key name', () => {
