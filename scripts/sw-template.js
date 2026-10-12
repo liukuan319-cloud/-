@@ -75,6 +75,11 @@ async function readRequest(request) {
   }
 }
 
+async function appShell() {
+  const cache = await caches.open(APP_CACHE);
+  return (await cache.match('/index.html')) || (await cache.match('/')) || (await cache.match(new URL('/', self.location.origin).toString()));
+}
+
 self.addEventListener('fetch', event => {
   const request = event.request;
   const url = new URL(request.url);
@@ -93,6 +98,25 @@ self.addEventListener('fetch', event => {
     return;
   }
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).catch(async () => (await caches.open(APP_CACHE)).match('/index.html') || Response.error()));
+    event.respondWith((async () => {
+      const cached = await appShell();
+      try {
+        const response = await fetch(request);
+        // Cloudflare may return an offline/edge error response instead of rejecting.
+        if (response.ok) return response;
+        return cached || response;
+      } catch {
+        return cached || new Response('班枢离线页面尚未缓存，请联网打开一次后重试。', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+      }
+    })());
+    return;
+  }
+  if (request.method === 'GET' && (request.destination === 'script' || request.destination === 'style' || request.destination === 'image' || url.pathname === '/manifest.webmanifest')) {
+    event.respondWith((async () => {
+      const cache = await caches.open(APP_CACHE);
+      const cached = await cache.match(request);
+      if (cached) return cached;
+      return fetch(request);
+    })());
   }
 });

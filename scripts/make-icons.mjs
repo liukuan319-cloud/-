@@ -19,16 +19,27 @@ function chunk(type, data) {
 }
 function icon(size) {
   const bytes = Buffer.alloc(size * (size * 4 + 1));
+  const shape = [[.50,.17],[.57,.42],[.82,.50],[.57,.58],[.50,.83],[.43,.58],[.18,.50],[.43,.42]].map(([x,y])=>[x*size,y*size]);
+  const inside = (x,y) => {
+    let contained = false;
+    for (let i=0,j=shape.length-1;i<shape.length;j=i++) {
+      const a=shape[i],b=shape[j];
+      if ((a[1]>y)!==(b[1]>y) && x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0]) contained=!contained;
+    }
+    return contained;
+  };
   for (let y = 0; y < size; y++) {
     const row = y * (size * 4 + 1);
     for (let x = 0; x < size; x++) {
       const offset = row + 1 + x * 4;
       const inset = Math.min(x, y, size - x - 1, size - y - 1);
-      let color = inset < size * .065 ? [245, 245, 247] : [56, 211 - Math.round(42 * (x + y) / (2 * size)), 159 - Math.round(21 * (x + y) / (2 * size))];
-      const dx = Math.abs(x - size / 2), dy = Math.abs(y - size / 2);
-      // A simple central "枢" inspired mark that stays legible at small sizes.
-      if ((dx < size * .20 && dy < size * .27) || (dx < size * .29 && dy < size * .065)) color = [255, 255, 255];
-      if ((dx < size * .055 && dy < size * .27) || (dx < size * .29 && dy < size * .055)) color = [47, 169, 138];
+      const t = (x + y) / (2 * size);
+      let color = inset < size * .055 ? [245, 245, 247] : [56 - Math.round(9 * t), 211 - Math.round(42 * t), 159 - Math.round(21 * t)];
+      // Match the existing brand mark: white central four-point sparkle, small plus and dot.
+      const central = inside(x,y);
+      const plus = (Math.abs(x - size * .77) < size * .022 && Math.abs(y - size * .16) < size * .10) || (Math.abs(y - size * .16) < size * .022 && Math.abs(x - size * .77) < size * .10);
+      const dot = ((x - size * .17) ** 2 + (y - size * .83) ** 2) < (size * .035) ** 2;
+      if (central || plus || dot) color = [255, 255, 255];
       bytes.set([...color, 255], offset);
     }
   }
