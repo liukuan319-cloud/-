@@ -6,7 +6,7 @@ export default function pwaWorker() {
     name: 'banshu-pwa-worker',
     apply: 'build',
     async writeBundle(_options, bundle) {
-      const assets = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png',
+      const assets = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-192.png', '/icons/icon-maskable-512.png',
         ...Object.values(bundle).map(item => `/${item.fileName}`).filter(path => /\.(?:js|css)$/.test(path))];
       const html = await readFile(new URL('../dist/index.html', import.meta.url));
       const template = await readFile(new URL('./sw-template.js', import.meta.url), 'utf8');
@@ -15,3 +15,4 @@ export default function pwaWorker() {
     },
   };
 }
+

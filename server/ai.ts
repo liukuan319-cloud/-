@@ -292,7 +292,7 @@ export async function banshuChat(env: Env, message: string, history: unknown, in
   const apiKey = env.API_KEY || env.AI_API_KEY;
   if (!apiKey) throw new HTTPException(503, { message: '服务端尚未配置 API_KEY。' });
   const parsedData = banshuDataSchema.parse(inputData);
-  const noticeCutoff = new Date(beijingDate() + 'T00:00:00Z'); noticeCutoff.setUTCDate(noticeCutoff.getUTCDate() - 6);
+  const noticeCutoff = new Date(beijingDate() + 'T00:00:00Z'); noticeCutoff.setUTCDate(noticeCutoff.getUTCDate() - 7);
   const data = { ...parsedData, notices: parsedData.notices.filter(notice => notice.date >= noticeCutoff.toISOString().slice(0, 10)) };
   const prior = z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(12000) })).max(12).parse(history || []);
   const base = (env.API_BASE || env.AI_BASE_URL || 'https://api.deepseek.com').replace(/\/$/, '');
@@ -493,3 +493,4 @@ export async function liveChat(env: Env, id: Identity, message: string, sourceDa
   if (cards.length) return { content: '已取得下方结果。需要修改或发布的事项仍须你检查并确认；其余问题请继续提问。', cards };
   throw new HTTPException(504, { message: '模型工具调用达到本次上限，请缩小问题范围后重试。' });
 }
+
